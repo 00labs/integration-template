@@ -227,6 +227,19 @@ impl HumaVenue {
             .pool_state
             .get_available_balance(s.pool_underlying_balance, reserve_limit);
 
+        // The on-chain ix pulls `withdrawal_amount - pool_available_balance` from
+        // the strategy if the pool's own balance is short. The strategy already
+        // bounds its pullable amount by both protocol-side liquidity and the
+        // pool's own k-token redemption value, so we just compare directly.
+        let withdrawal_amount =
+            (shares as u128 * mode_assets as u128 / s.mode_supply as u128) as u64;
+        let strategy_needed = withdrawal_amount.saturating_sub(pool_available_balance);
+        if strategy_needed > s.strategy.available_liquidity_for_withdrawal() {
+            return Err(TradingVenueError::AmmMethodError(
+                "instant withdrawal exceeds strategy available liquidity".into(),
+            ));
+        }
+
         let out = underlying_for_instant_withdraw(
             shares,
             mode_assets,
@@ -485,8 +498,11 @@ impl TradingVenue for HumaVenue {
             decode_anchor_account("HumaConfig", huma_config_account.data())?;
         let deployment_config: DeploymentConfig =
             decode_anchor_account("DeploymentConfig", deployment_config_account.data())?;
-        let mut strategy =
-            Strategy::from_deployment_config(&deployment_config, pool_config.underlying_mint)?;
+        let mut strategy = Strategy::from_deployment_config(
+            &deployment_config,
+            pool_config.underlying_mint,
+            self.pool_authority_key,
+        )?;
 
         let pool_state: PoolState = decode_anchor_account("PoolState", pool_state_account.data())?;
         let mode_index = pool_state.mode_index_for(&self.mode_config_key).ok_or(

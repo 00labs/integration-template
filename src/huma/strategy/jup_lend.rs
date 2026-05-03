@@ -124,6 +124,13 @@ impl JupLendStrategy {
         ]
     }
 
+    /// JupLend doesn't expose a typed reader for its reserve liquidity, so we
+    /// treat the available amount as unbounded and let the on-chain CPI fail
+    /// loudly if the protocol is illiquid.
+    pub fn available_liquidity_for_withdrawal(&self) -> u64 {
+        u64::MAX
+    }
+
     pub fn lookup_table_keys(&self) -> Vec<Pubkey> {
         vec![
             self.lending,

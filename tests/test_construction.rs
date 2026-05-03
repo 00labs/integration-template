@@ -1,10 +1,11 @@
 #[cfg(test)]
 mod test_construction {
-    //! Integration test ensuring that a venue:
-    //! - can be constructed from on-chain account data,
+    //! Integration test ensuring that a Huma venue:
+    //! - can be constructed from a `ModeConfig` account,
     //! - can load its required state via the AccountsCache,
-    //! - returns valid token info,
-    //! - supports quoting for both swap directions,
+    //! - returns valid token info (the underlying mint and the mode mint),
+    //! - supports quoting for both swap directions
+    //!   (deposit: underlying → mode_mint, instant withdraw: mode_mint → underlying),
     //! - and exposes sane quoting boundaries.
     //!
     //! Any AMM implementer integrating with Titan should ensure their venue
@@ -17,11 +18,9 @@ mod test_construction {
     use solana_client::nonblocking::rpc_client::RpcClient;
     use solana_pubkey::Pubkey;
     use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
+    use titan_integration_template::huma::HumaVenue;
+    use titan_integration_template::trading_venue::{FromAccount, TradingVenue};
     use titan_integration_template::trading_venue::{QuoteRequest, SwapType};
-    use titan_integration_template::{
-        example::RaydiumAmmVenue,
-        trading_venue::{FromAccount, TradingVenue},
-    };
 
     use assert_no_alloc::*;
 
@@ -37,37 +36,40 @@ mod test_construction {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
-    /// Ensure that the venue can:
-    /// - Build from a raw on-chain account,
+    /// Ensure that the Huma venue can:
+    /// - Build from a raw on-chain `ModeConfig` account,
     /// - Perform a state update using the caching layer,
-    /// - Report valid token metadata,
+    /// - Report valid token metadata (underlying + mode mint),
     /// - Calculate valid quoting boundaries,
-    /// - Return nonzero, liquidity-supported quotes at both boundary edges.
+    /// - Return nonzero, liquidity-supported quotes at both boundary edges
+    ///   for both deposit and instant-withdraw directions.
     ///
+    /// The keyed account is a `ModeConfig` PDA; `HumaVenue::from_account`
+    /// pairs it with the hardcoded `POOL_CONFIG_KEY` constant.
     #[rstest]
     #[tokio::test]
-    #[case("Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw")] // Example Raydium pool
-    async fn test_construction(#[case] amm_key: String) {
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    async fn test_construction(#[case] mode_config_key: String) {
         init_test_logger();
 
         //
         // Prepare inputs
         //
-        let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
+        let mode_config_key = Pubkey::from_str(&mode_config_key).expect("Invalid test pubkey");
 
         let rpc_url =
             env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
         let rpc = RpcClient::new(rpc_url);
 
         //
-        // Fetch the venue’s account and construct the venue
+        // Fetch the ModeConfig account and construct the venue
         //
-        let venue_account = rpc
-            .get_account(&amm_key)
+        let mode_config_account = rpc
+            .get_account(&mode_config_key)
             .await
-            .expect("Failed to fetch AMM account");
+            .expect("Failed to fetch ModeConfig account");
 
-        let mut venue = RaydiumAmmVenue::from_account(&amm_key, &venue_account)
+        let mut venue = HumaVenue::from_account(&mode_config_key, &mode_config_account)
             .expect("Failed to construct venue from account");
 
         //
@@ -84,14 +86,14 @@ mod test_construction {
         //
         let token_info = venue.get_token_info();
         log::info!("Loaded token info: {:#?}", token_info);
-        assert!(token_info.len() > 0);
+        assert!(!token_info.is_empty());
 
-        // Raydium AMMs always have 2 tokens.
+        // A Huma venue exposes exactly 2 mints: [underlying, mode_mint].
         assert_eq!(token_info.len(), 2);
 
         //
-        // 5. For each direction (token0 → token1, token1 → token0)
-        //    validate quoting boundaries and quote correctness.
+        // For each direction (underlying → mode, mode → underlying)
+        // validate quoting boundaries and quote correctness.
         //
         for (input_idx, output_idx) in [(0, 1), (1, 0)] {
             log::info!("Checking bounds for pair ({}, {})", input_idx, output_idx);

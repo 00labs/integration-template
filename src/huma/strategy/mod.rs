@@ -28,9 +28,12 @@ macro_rules! dispatch {
 impl Strategy {
     /// Builds a routable strategy from an on-chain `DeploymentConfig`. Manual
     /// strategies have no CPI path for instant withdrawals and are rejected.
+    /// `pool_authority` is needed to derive the strategy-specific accounts the
+    /// pool holds (e.g. Kamino's k-token ATA).
     pub fn from_deployment_config(
         deployment_config: &DeploymentConfig,
         underlying_mint: Pubkey,
+        pool_authority: Pubkey,
     ) -> Result<Self, TradingVenueError> {
         match deployment_config.strategy_type {
             DeploymentStrategyType::JupLend => Ok(Strategy::JupLend(JupLendStrategy::new(
@@ -38,7 +41,7 @@ impl Strategy {
                 underlying_mint,
             ))),
             DeploymentStrategyType::KaminoLend => Ok(Strategy::KaminoLend(
-                KaminoLendStrategy::new(deployment_config.target_key),
+                KaminoLendStrategy::new(deployment_config.target_key, pool_authority),
             )),
             DeploymentStrategyType::Manual => Err(TradingVenueError::UnsupportedVenue(
                 "manual strategy is not routable".into(),
@@ -68,6 +71,10 @@ impl Strategy {
             pool_authority_key,
             underlying_token_program
         )
+    }
+
+    pub fn available_liquidity_for_withdrawal(&self) -> u64 {
+        dispatch!(self, available_liquidity_for_withdrawal)
     }
 
     pub fn lookup_table_keys(&self) -> Vec<Pubkey> {

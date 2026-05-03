@@ -1,11 +1,12 @@
 use klend_interface::state::Reserve;
-use solana_account::ReadableAccount;
+use solana_account::{Account, ReadableAccount};
 use solana_instruction::AccountMeta;
 use solana_pubkey::Pubkey;
 
 use crate::account_caching::AccountsCache;
 use crate::huma::constants::{KLEND_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSVAR_INSTRUCTIONS_ID};
 use crate::huma::pda::derive_ata;
+use crate::huma::state::read_token_account_amount;
 use crate::trading_venue::error::TradingVenueError;
 
 /// 8-byte Anchor discriminator prefix on the KLend Reserve account.
@@ -33,33 +34,50 @@ pub struct KaminoLendStrategy {
     lending_market: Pubkey,
     reserve_collateral_mint: Pubkey,
     reserve_liquidity_supply: Pubkey,
-    /// Underlying tokens currently held by the reserve liquidity supply vault
-    /// and immediately withdrawable. Read from `Reserve.liquidity.total_available_amount`.
-    /// TODO: clamp instant-withdraw quotes against this when wired into the venue.
-    #[allow(dead_code)]
+    /// Pool authority's k-token ATA — what we redeem to pull underlying back.
+    pool_authority_k_token_ata: Pubkey,
+    /// Maximum underlying we can pull from Kamino on demand:
+    /// `min(reserve.total_available_amount, k_token_balance × exchange_rate)`.
+    /// Captures both "the protocol has free liquidity" and "we hold enough
+    /// k-tokens to redeem for that underlying."
     available_liquidity: u64,
 }
 
 impl KaminoLendStrategy {
-    pub fn new(reserve: Pubkey) -> Self {
+    pub fn new(reserve: Pubkey, pool_authority: Pubkey) -> Self {
+        let reserve_collateral_mint = derive_reserve_collateral_mint(&reserve);
+        let pool_authority_k_token_ata = derive_ata(
+            &pool_authority,
+            &SPL_TOKEN_PROGRAM_ID,
+            &reserve_collateral_mint,
+        );
         Self {
             reserve,
             lending_market: Pubkey::default(),
-            reserve_collateral_mint: derive_reserve_collateral_mint(&reserve),
+            reserve_collateral_mint,
             reserve_liquidity_supply: derive_reserve_liquidity_supply(&reserve),
+            pool_authority_k_token_ata,
             available_liquidity: 0,
         }
     }
 
     pub fn required_pubkeys_for_update(&self) -> Vec<Pubkey> {
-        vec![self.reserve]
+        vec![self.reserve, self.pool_authority_k_token_ata]
     }
 
     pub async fn update(&mut self, cache: &dyn AccountsCache) -> Result<(), TradingVenueError> {
-        let reserve_account = cache
-            .get_account(&self.reserve)
+        let [reserve_account, k_token_account]: [Option<Account>; 2] = cache
+            .get_accounts(&[self.reserve, self.pool_authority_k_token_ata])
             .await?
-            .ok_or(TradingVenueError::NoAccountFound(self.reserve.into()))?;
+            .try_into()
+            .map_err(|_| TradingVenueError::FailedToFetchMultipleAccountData)?;
+        let reserve_account =
+            reserve_account.ok_or(TradingVenueError::NoAccountFound(self.reserve.into()))?;
+        let k_token_account = k_token_account.ok_or(TradingVenueError::NoAccountFound(
+            self.pool_authority_k_token_ata.into(),
+        ))?;
+        let k_token_balance = read_token_account_amount(k_token_account.data())?;
+
         let body = reserve_account
             .data()
             .get(DISCRIMINATOR_LEN..)
@@ -69,8 +87,23 @@ impl KaminoLendStrategy {
         })?;
 
         self.lending_market = reserve.lending_market;
-        self.available_liquidity = reserve.liquidity.total_available_amount;
+
+        // Underlying we'd get if we redeemed all our k-tokens at the current
+        // exchange rate. exchange_rate = (available + borrowed) / collateral_total_supply.
+        let available = reserve.available_liquidity();
+        let total_collateral = reserve.collateral_total_supply();
+        let redemption_value = if total_collateral == 0 {
+            0
+        } else {
+            let total_supply_underlying = available as u128 + reserve.borrowed_amount();
+            ((k_token_balance as u128 * total_supply_underlying) / total_collateral as u128) as u64
+        };
+        self.available_liquidity = available.min(redemption_value);
         Ok(())
+    }
+
+    pub fn available_liquidity_for_withdrawal(&self) -> u64 {
+        self.available_liquidity
     }
 
     /// Returns the 9 remaining accounts for the instant withdrawal CPI into KLend.
@@ -87,15 +120,10 @@ impl KaminoLendStrategy {
     /// 9. `klend_program`
     pub fn instant_withdraw_remaining_accounts(
         &self,
-        pool_authority_key: &Pubkey,
+        _pool_authority_key: &Pubkey,
         _underlying_token_program: &Pubkey,
     ) -> Vec<AccountMeta> {
         let lending_market_authority = derive_lending_market_authority(&self.lending_market);
-        let user_source_collateral = derive_ata(
-            pool_authority_key,
-            &SPL_TOKEN_PROGRAM_ID,
-            &self.reserve_collateral_mint,
-        );
 
         vec![
             AccountMeta::new(self.reserve, false),
@@ -103,7 +131,7 @@ impl KaminoLendStrategy {
             AccountMeta::new_readonly(lending_market_authority, false),
             AccountMeta::new(self.reserve_collateral_mint, false),
             AccountMeta::new(self.reserve_liquidity_supply, false),
-            AccountMeta::new(user_source_collateral, false),
+            AccountMeta::new(self.pool_authority_k_token_ata, false),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
             AccountMeta::new_readonly(SYSVAR_INSTRUCTIONS_ID, false),
             AccountMeta::new_readonly(KLEND_PROGRAM_ID, false),
@@ -116,6 +144,7 @@ impl KaminoLendStrategy {
             self.lending_market,
             self.reserve_collateral_mint,
             self.reserve_liquidity_supply,
+            self.pool_authority_k_token_ata,
             KLEND_PROGRAM_ID,
         ]
     }
