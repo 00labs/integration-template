@@ -20,9 +20,7 @@ use std::fmt::Display;
 /// - `RaydiumAMM`: Raydium’s constant-product AMM on Solana.
 #[derive(Debug, Copy, Clone)]
 pub enum PoolProtocol {
-    /// Example/custom protocol — integrators should rename or replace this
-    /// with their own protocol name.
-    YourPoolProtocol,
+    Huma,
 
     /// Raydium’s AMM (x*y=k) pools on Solana.
     RaydiumAMM,
@@ -44,7 +42,7 @@ impl From<PoolProtocol> for String {
     /// exposes protocol metadata via API.
     fn from(protocol: PoolProtocol) -> Self {
         match protocol {
-            PoolProtocol::YourPoolProtocol => "YourPoolProtocol".to_string(),
+            PoolProtocol::Huma => "Huma".to_string(),
             PoolProtocol::RaydiumAMM => "RaydiumAMM".to_string(),
         }
     }
