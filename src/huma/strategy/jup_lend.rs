@@ -6,7 +6,7 @@ use crate::huma::constants::{
     ASSOCIATED_TOKEN_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID,
     JUP_LRRM_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
-use crate::huma::pda::derive_ata;
+use crate::huma::pda;
 use crate::trading_venue::error::TradingVenueError;
 
 fn derive_f_token_mint(liquidity_mint: &Pubkey) -> Pubkey {
@@ -95,7 +95,7 @@ impl JupLendStrategy {
 
         let f_token_mint = derive_f_token_mint(liquidity_mint);
         let owner_token_account =
-            derive_ata(pool_authority_key, underlying_token_program, &f_token_mint);
+            pda::derive_ata(pool_authority_key, underlying_token_program, &f_token_mint);
         let lending_admin = derive_lending_admin();
         let supply_token_reserves_liquidity =
             derive_supply_token_reserves_liquidity(liquidity_mint);
@@ -103,7 +103,7 @@ impl JupLendStrategy {
             derive_lending_supply_position_on_liquidity(liquidity_mint, &self.lending);
         let rate_model = derive_rate_model(liquidity_mint);
         let liquidity = derive_liquidity();
-        let vault = derive_ata(&liquidity, underlying_token_program, liquidity_mint);
+        let vault = pda::derive_ata(&liquidity, underlying_token_program, liquidity_mint);
         let rewards_rate_model = derive_rewards_rate_model(liquidity_mint);
 
         vec![

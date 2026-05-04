@@ -1,50 +1,55 @@
 #[cfg(test)]
 mod simulations {
-    //! Quoting tests for Titan-compatible AMM venues.
+    //! Quoting tests for the Huma venue.
     //!
     //! The tests ensure:
     //! - The venue loads on-chain state correctly
-    //! - It exposes valid token info
+    //! - It exposes valid token info (underlying + mode mint)
     //! - It establishes valid quoting boundaries for both swap directions
-    //! - Its off-chain quote matches on-chain execution on and off the boundaries
+    //! - Its off-chain deposit quote matches LiteSVM-simulated on-chain deposits
+    //!   (instant-withdraw direction is exercised off-chain only)
+    //! - The off-chain quote function is monotone non-decreasing in input
     //! - Its quoting speed is sufficient for integration
     //!
-    //! Any AMM integrator must pass these quoting tests to ensure their pool
-    //! is safe, consistent, and suitable for Titan routing.
+    //! `test_bound_simulation` and `test_random_samples` simulate the deposit
+    //! ix in LiteSVM against a snapshot of staging-on-mainnet state. They
+    //! require the keypair to have the per-lender accounts initialized via
+    //! `create_lender_accounts_v2`.
+
+    use std::env;
+    use std::time::Instant;
 
     use litesvm::LiteSVM;
     use rand::Rng;
     use rstest::rstest;
-
-    use solana_account::Account;
-    use solana_account::ReadableAccount;
-    use solana_account::WritableAccount;
+    use solana_account::{Account, ReadableAccount, WritableAccount};
     use solana_client::nonblocking::rpc_client::RpcClient;
     use solana_compute_budget::compute_budget::ComputeBudget;
+    use solana_instruction::{AccountMeta, Instruction};
+    use solana_program::hash;
     use solana_program::native_token::LAMPORTS_PER_SOL;
     use solana_program_pack::Pack;
-    use solana_pubkey::{Pubkey, pubkey};
+    use solana_pubkey::Pubkey;
     use solana_sdk::signature::Keypair;
     use solana_sdk::signer::Signer;
+    use solana_sdk_ids::system_program;
     use solana_sysvar::clock::{self, Clock};
     use solana_transaction::Transaction;
-    use std::str::FromStr;
-    use std::time::Instant;
 
-    use spl_associated_token_account::get_associated_token_address_with_program_id;
     use spl_token::state::{Account as TokenAccount, AccountState};
 
-    use std::env;
-
-    use titan_integration_template::example::RAYDIUM_AMM_PROGRAM_ID;
-    use titan_integration_template::trading_venue::SwapType;
-
-    use titan_integration_template::{
-        account_caching::AccountsCache, example::RaydiumAmmVenue, trading_venue::QuoteRequest,
+    use titan_integration_template::account_caching::AccountsCache;
+    use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
+    use titan_integration_template::huma::HumaVenue;
+    use titan_integration_template::huma::constants::{
+        ASSOCIATED_TOKEN_PROGRAM_ID, HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID,
+        JUP_LIQUIDITY_PROGRAM_ID, JUP_LRRM_PROGRAM_ID, KLEND_PROGRAM_ID, POOL_CONFIG_KEY,
+        PROGRAM_ID,
     };
-    use titan_integration_template::{
-        account_caching::rpc_cache::RpcClientCache,
-        trading_venue::{FromAccount, TradingVenue, error::TradingVenueError},
+    use titan_integration_template::huma::pda;
+    use titan_integration_template::trading_venue::error::TradingVenueError;
+    use titan_integration_template::trading_venue::{
+        FromAccount, QuoteRequest, SwapType, TradingVenue,
     };
 
     /// Initialize logging for test diagnostics.
@@ -52,11 +57,10 @@ mod simulations {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
-    /// Creates a new LiteSVM instance configured with:
-    /// - Necessary helper programs loaded from `programs/`
-    /// - A funded system account for signing transactions
-    ///
-    /// Integrators should update the programs loaded here for their own tests.
+    /// Loads all Huma + strategy program binaries into LiteSVM and creates a
+    /// funded payer keypair. Programs whose `.so` files aren't present are
+    /// silently skipped — the deposit-only tests don't need the strategy
+    /// programs (klend/jup-lending), but loading them is harmless.
     pub fn setup_litesvm() -> (LiteSVM, Keypair) {
         let mut litesvm = LiteSVM::new()
             .with_compute_budget(ComputeBudget {
@@ -67,21 +71,18 @@ mod simulations {
             .with_sigverify(false)
             .with_transaction_history(0);
 
-        // These two programs appear to be dependencies required by Raydium
-        // CLMM math or helper operations.
-        let spl_calc_program = pubkey!("sspUE1vrh7xRoXxGsg7vR1zde2WdGtJRbyK9uRumBDy");
-        let spl_calc_path = format!("programs/{}.so", spl_calc_program);
-        litesvm
-            .add_program_from_file(spl_calc_program, spl_calc_path)
-            .unwrap();
+        for pid in [
+            PROGRAM_ID,
+            HUMA_PROGRAM_ID,
+            KLEND_PROGRAM_ID,
+            JUP_LENDING_PROGRAM_ID,
+            JUP_LIQUIDITY_PROGRAM_ID,
+            JUP_LRRM_PROGRAM_ID,
+        ] {
+            let path = format!("programs/{}.so", pid);
+            litesvm.add_program_from_file(pid, &path).unwrap();
+        }
 
-        let spl_calc_program_2 = pubkey!("ssmbu3KZxgonUtjEMCKspZzxvUQCxAFnyh1rcHUeEDo");
-        let spl_calc_path_2 = format!("programs/{}.so", spl_calc_program_2);
-        litesvm
-            .add_program_from_file(spl_calc_program_2, spl_calc_path_2)
-            .unwrap();
-
-        // Create a funded user wallet.
         let keypair = Keypair::new();
         let account = Account {
             lamports: 10_000 * LAMPORTS_PER_SOL,
@@ -90,99 +91,130 @@ mod simulations {
             executable: false,
             rent_epoch: 0,
         };
-        litesvm
-            .set_account(keypair.pubkey(), account.into())
-            .unwrap();
+        litesvm.set_account(keypair.pubkey(), account).unwrap();
 
         (litesvm, keypair)
     }
 
-    /// Simulate a swap using LiteSVM and return the output amount of token B.
-    /// This should give the true on-chain output for that swap.
-    async fn sim_quote_request(
-        venue: &dyn TradingVenue,
-        cache: &dyn AccountsCache,
-        request: QuoteRequest,
+    /// Pull the current Clock sysvar from RPC and load it into LiteSVM so
+    /// freshness checks (mode-asset staleness, etc.) align with mainnet time.
+    async fn sync_clock(litesvm: &mut LiteSVM, cache: &dyn AccountsCache) {
+        let clock_account = cache
+            .get_account(&clock::ID)
+            .await
+            .unwrap()
+            .ok_or(TradingVenueError::NoAccountFound(clock::ID.into()))
+            .unwrap();
+        let clock: Clock = clock_account.deserialize_data().unwrap();
+        litesvm.set_sysvar::<Clock>(&clock);
+    }
+
+    /// Copy each non-executable cached account into LiteSVM. Skips executables
+    /// (already loaded as program binaries) and any caller-specified pubkeys
+    /// that the caller wants to keep their synthesized version of.
+    async fn copy_accounts(
         litesvm: &mut LiteSVM,
-        keypair: &Keypair,
-    ) -> u64 {
-        let tradable_mints = venue.get_token_info();
-
-        // Identify which token is A and which is B (depending on swap direction)
-        let idx_0 = tradable_mints
-            .iter()
-            .position(|x| x.pubkey == request.input_mint)
-            .unwrap();
-        let idx_1 = (idx_0 + 1) % 2;
-
-        let (token_a, token_a_program) = (
-            tradable_mints[idx_0].pubkey,
-            tradable_mints[idx_0].get_token_program(),
-        );
-        let (token_b, token_b_program) = (
-            tradable_mints[idx_1].pubkey,
-            tradable_mints[idx_1].get_token_program(),
-        );
-
-        let token_account_a = get_associated_token_address_with_program_id(
-            &keypair.pubkey(),
-            &token_a,
-            &token_a_program,
-        );
-        let token_account_b = get_associated_token_address_with_program_id(
-            &keypair.pubkey(),
-            &token_b,
-            &token_b_program,
-        );
-
-        //
-        // Create synthetic token accounts inside the simulator
-        //
-
-        // Token A account (source)
-        let mut account_a = Account::new(LAMPORTS_PER_SOL, TokenAccount::LEN, &spl_token::ID);
-        let mut account_a_data = TokenAccount::default();
-        account_a_data.mint = token_a;
-        account_a_data.owner = keypair.pubkey();
-        account_a_data.state = AccountState::Initialized;
-        account_a_data.amount = u64::MAX; // ensure "infinite" input
-        account_a_data.pack_into_slice(account_a.data_as_mut_slice());
-
-        // Token B account (destination)
-        let mut account_b = Account::new(LAMPORTS_PER_SOL, TokenAccount::LEN, &spl_token::ID);
-        let mut account_b_data = TokenAccount::default();
-        account_b_data.mint = token_b;
-        account_b_data.owner = keypair.pubkey();
-        account_b_data.state = AccountState::Initialized;
-        account_b_data.amount = 0;
-        account_b_data.pack_into_slice(account_b.data_as_mut_slice());
-
-        // Load accounts into LiteSVM
-        litesvm.set_account(token_account_a, account_a).unwrap();
-        litesvm.set_account(token_account_b, account_b).unwrap();
-
-        //
-        // Build the swap instruction
-        //
-        let ix = venue
-            .generate_swap_instruction(request, keypair.pubkey())
-            .unwrap();
-
-        // Load all instruction accounts into SVM (except executable ones already present)
-        let pks: Vec<Pubkey> = ix.accounts.iter().map(|acc| acc.pubkey).collect();
-        let accounts_to_load = cache.get_accounts(&pks).await.unwrap();
-        for (account, key) in accounts_to_load.iter().zip(pks) {
-            if let Some(acc) = account {
-                if acc.executable {
+        cache: &dyn AccountsCache,
+        pubkeys: &[Pubkey],
+        keep_local: &[Pubkey],
+    ) {
+        let cached = cache.get_accounts(pubkeys).await.unwrap();
+        for (acc, key) in cached.iter().zip(pubkeys) {
+            if let Some(a) = acc {
+                if a.executable || keep_local.contains(key) {
                     continue;
                 }
-                litesvm.set_account(key, acc.clone()).unwrap();
+                litesvm.set_account(*key, a.clone()).unwrap();
             }
         }
+    }
 
-        //
-        // Execute swap inside the SIM
-        //
+    /// Sets the lender's underlying-mint ATA in LiteSVM with `u64::MAX`
+    /// balance so the deposit ix has plenty to draw from.
+    fn fund_underlying_ata(
+        litesvm: &mut LiteSVM,
+        owner: Pubkey,
+        underlying_mint: Pubkey,
+        underlying_token_program: Pubkey,
+    ) -> Pubkey {
+        let ata = spl_associated_token_account::get_associated_token_address_with_program_id(
+            &owner,
+            &underlying_mint,
+            &underlying_token_program,
+        );
+        let mut acc = Account::new(LAMPORTS_PER_SOL, TokenAccount::LEN, &spl_token::ID);
+        let mut data = TokenAccount::default();
+        data.mint = underlying_mint;
+        data.owner = owner;
+        data.state = AccountState::Initialized;
+        data.amount = u64::MAX;
+        data.pack_into_slice(acc.data_as_mut_slice());
+        litesvm.set_account(ata, acc).unwrap();
+        ata
+    }
+
+    /// Computes the Anchor discriminator for `name` at runtime via SHA-256.
+    fn compute_disc(name: &str) -> [u8; 8] {
+        let h = hash::hashv(&[b"global:", name.as_bytes()]);
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&h.as_ref()[..8]);
+        out
+    }
+
+    /// Calls `create_lender_accounts_v2` on the permissionless program to
+    /// initialize the lender's `lender_state` PDA and mode-token ATA. Required
+    /// before the lender can deposit.
+    async fn create_lender_accounts(
+        litesvm: &mut LiteSVM,
+        cache: &dyn AccountsCache,
+        venue: &HumaVenue,
+        keypair: &Keypair,
+    ) {
+        let mode_config_key = venue.market_id();
+        let huma_config_key = venue.huma_config_key().unwrap();
+        let mode_mint_key = venue.mode_mint_key();
+        // Bring the read-only state accounts into LiteSVM.
+        copy_accounts(
+            litesvm,
+            cache,
+            &[
+                POOL_CONFIG_KEY,
+                venue.pool_state_key(),
+                mode_config_key,
+                mode_mint_key,
+                huma_config_key,
+            ],
+            &[],
+        )
+        .await;
+
+        let mode_token_program = venue.get_token_info()[1].get_token_program();
+        let lender_state_key = pda::derive_lender_state(&mode_config_key, &keypair.pubkey());
+        let lender_mode_token =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &keypair.pubkey(),
+                &mode_mint_key,
+                &mode_token_program,
+            );
+        let metas = vec![
+            AccountMeta::new(keypair.pubkey(), true),           // payer
+            AccountMeta::new_readonly(keypair.pubkey(), false), // lender (= payer)
+            AccountMeta::new_readonly(huma_config_key, false),
+            AccountMeta::new_readonly(POOL_CONFIG_KEY, false),
+            AccountMeta::new_readonly(venue.pool_state_key(), false),
+            AccountMeta::new_readonly(mode_config_key, false),
+            AccountMeta::new_readonly(mode_mint_key, false),
+            AccountMeta::new(lender_state_key, false), // init
+            AccountMeta::new(lender_mode_token, false), // init_if_needed
+            AccountMeta::new_readonly(mode_token_program, false),
+            AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ];
+        let ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: metas,
+            data: compute_disc("create_lender_accounts_v2").to_vec(),
+        };
         let blockhash = litesvm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -190,365 +222,254 @@ mod simulations {
             &[keypair],
             blockhash,
         );
-
-        let simulation_result = litesvm.simulate_transaction(tx).unwrap();
-
-        //
-        // Read output account and extract the final token amount
-        //
-        let account_b = simulation_result
-            .post_accounts
-            .into_iter()
-            .find(|(pk, _)| pk == &token_account_b)
-            .map(|(_, acc)| acc)
-            .unwrap();
-        let post_b = TokenAccount::unpack_from_slice(account_b.data())
-            .expect("Failed to unpack token B account");
-        post_b.amount
+        let result = litesvm.send_transaction(tx);
+        assert!(
+            result.is_ok(),
+            "create_lender_accounts_v2 failed: {:?}",
+            result.err()
+        );
     }
 
-    /// Returns a log-uniformly sampled u64 in `[lo, hi]`.
+    /// Simulates a deposit at `request.amount` underlying and returns the
+    /// resulting mode-token balance.
+    async fn sim_deposit_request(
+        venue: &HumaVenue,
+        cache: &dyn AccountsCache,
+        request: QuoteRequest,
+        litesvm: &mut LiteSVM,
+        keypair: &Keypair,
+    ) -> u64 {
+        let token_info = venue.get_token_info();
+        let [underlying_token, mode_token] = token_info else {
+            panic!("Huma venue must expose exactly 2 tokens");
+        };
+
+        let depositor_underlying_ata = fund_underlying_ata(
+            litesvm,
+            keypair.pubkey(),
+            underlying_token.pubkey,
+            underlying_token.get_token_program(),
+        );
+        let depositor_mode_ata =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &keypair.pubkey(),
+                &mode_token.pubkey,
+                &mode_token.get_token_program(),
+            );
+        let ix = venue
+            .generate_swap_instruction(request, keypair.pubkey())
+            .unwrap();
+        // Refresh the on-chain state in LiteSVM for this iteration. Keep our
+        // synthetic depositor ATA — don't let the cache (which has no entry
+        // for it) overwrite with `None`-handling logic.
+        let pks: Vec<Pubkey> = ix.accounts.iter().map(|a| a.pubkey).collect();
+        copy_accounts(litesvm, cache, &pks, &[depositor_underlying_ata]).await;
+
+        let blockhash = litesvm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&keypair.pubkey()),
+            &[keypair],
+            blockhash,
+        );
+        let sim = litesvm
+            .simulate_transaction(tx)
+            .expect("deposit simulation failed");
+        let mode_acc = sim
+            .post_accounts
+            .into_iter()
+            .find(|(pk, _)| pk == &depositor_mode_ata)
+            .map(|(_, a)| a)
+            .expect("depositor mode-token account missing in post state");
+        TokenAccount::unpack_from_slice(mode_acc.data())
+            .expect("failed to unpack depositor mode-token account")
+            .amount
+    }
+
     fn sample_log_uniform_u64(lo: u64, hi: u64) -> u64 {
         assert!(lo >= 1, "log-uniform sampling requires lo >= 1");
         assert!(lo <= hi);
-
-        let lo_f = lo as f64;
-        let hi_f = hi as f64;
-
-        let log_lo = lo_f.ln();
-        let log_hi = hi_f.ln();
-
+        let log_lo = (lo as f64).ln();
+        let log_hi = (hi as f64).ln();
         let r: f64 = rand::rng().random();
         let log_val = log_lo + r * (log_hi - log_lo);
-
         (log_val.exp() as u64).clamp(lo, hi)
     }
 
-    // -------------------------------------------------------------------------
-    // Test 1: check boundary values in simulation
-    // -------------------------------------------------------------------------
-
-    #[rstest]
-    #[tokio::test]
-    #[case("Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw")]
-    async fn test_bound_simulation(#[case] amm_key: Pubkey) {
-        init_test_logger();
-
-        // Fetch live pool data from RPC
-        let rpc_url = env::var("SOLANA_RPC_URL").unwrap();
-        let rpc = RpcClient::new(rpc_url);
-        let venue_account = rpc.get_account(&amm_key).await.unwrap();
-
-        // Build venue + load pool state
-        let cache = RpcClientCache::new(rpc);
-        let mut venue = RaydiumAmmVenue::from_account(&amm_key, &venue_account).unwrap();
-        venue.update_state(&cache).await.unwrap();
-
-        // Setup simulation VM
-        let (mut litesvm, keypair) = setup_litesvm();
-
-        // Load Raydium AMM program binary
-        litesvm
-            .add_program_from_file(
-                RAYDIUM_AMM_PROGRAM_ID,
-                "programs/675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8.so",
-            )
-            .unwrap();
-
-        // Sync sysvar clock to real network
-        let latest_clock = cache.get_account(&clock::ID).await.unwrap();
-        let latest_clock: Clock = latest_clock
-            .as_ref()
-            .ok_or(TradingVenueError::NoAccountFound(clock::ID.into()))
-            .unwrap()
-            .deserialize_data()
-            .unwrap();
-
-        litesvm.set_sysvar::<Clock>(&latest_clock);
-
-        // Ensure valid token set
-        let tradable_mints = venue.get_token_info();
-        assert_eq!(tradable_mints.len(), 2);
-
-        //
-        // For each swap direction, verify that boundary quotes match simulation.
-        //
-        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
-            let (lower, upper) = venue.bounds(in_idx as u8, out_idx as u8).unwrap();
-
-            for bound in [lower, upper] {
-                let request = QuoteRequest {
-                    input_mint: venue.get_token(in_idx).unwrap().pubkey,
-                    output_mint: venue.get_token(out_idx).unwrap().pubkey,
-                    amount: bound,
-                    swap_type: SwapType::ExactIn,
-                };
-
-                let sim =
-                    sim_quote_request(&venue, &cache, request.clone(), &mut litesvm, &keypair)
-                        .await;
-                let quote = venue.quote(request).unwrap();
-
-                log::debug!(
-                    "Boundary = {}\nSimulated = {}\nOff-chain quote = {}\nDelta = {}",
-                    bound,
-                    sim,
-                    quote.expected_output,
-                    quote.expected_output.abs_diff(sim)
-                );
-
-                assert_eq!(quote.expected_output.abs_diff(sim), 0)
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Test 2: Random sampling simulation
-    // -------------------------------------------------------------------------
-
-    #[rstest]
-    #[tokio::test]
-    #[case("Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw")]
-    async fn test_random_samples(#[case] amm_key: Pubkey) {
-        init_test_logger();
-
-        // Fetch venue state from RPC
-        let rpc_url = env::var("SOLANA_RPC_URL").unwrap();
-        let rpc = RpcClient::new(rpc_url);
-        let venue_account = rpc.get_account(&amm_key).await.unwrap();
-
-        let cache = RpcClientCache::new(rpc);
-        let mut venue = RaydiumAmmVenue::from_account(&amm_key, &venue_account).unwrap();
-        venue.update_state(&cache).await.unwrap();
-
-        // Setup simulation VM
-        let (mut litesvm, keypair) = setup_litesvm();
-        litesvm
-            .add_program_from_file(
-                RAYDIUM_AMM_PROGRAM_ID,
-                "programs/675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8.so",
-            )
-            .unwrap();
-
-        // Sync sysvar clock
-        let latest_clock = cache.get_account(&clock::ID).await.unwrap();
-        let latest_clock: Clock = latest_clock
-            .as_ref()
-            .ok_or(TradingVenueError::NoAccountFound(clock::ID.into()))
-            .unwrap()
-            .deserialize_data()
-            .unwrap();
-        litesvm.set_sysvar::<Clock>(&latest_clock);
-
-        //
-        // For each direction, randomly sample the entire valid quoting domain and
-        // ensure that the quoted amount matches the simulated amount.
-        //
-        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
-            let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
-
-            for _ in 0..50 {
-                let amount = sample_log_uniform_u64(lb, ub);
-
-                let request = QuoteRequest {
-                    input_mint: venue.get_token(in_idx as usize).unwrap().pubkey,
-                    output_mint: venue.get_token(out_idx as usize).unwrap().pubkey,
-                    amount,
-                    swap_type: SwapType::ExactIn,
-                };
-
-                let sim =
-                    sim_quote_request(&venue, &cache, request.clone(), &mut litesvm, &keypair)
-                        .await;
-                let quote = venue.quote(request).unwrap();
-
-                log::debug!(
-                    "Random sim: {}\nQuote: {}\nDelta: {}",
-                    sim,
-                    quote.expected_output,
-                    quote.expected_output.abs_diff(sim)
-                );
-
-                assert_eq!(quote.expected_output.abs_diff(sim), 0)
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Test 3: AMM Monotonicity
-    // -------------------------------------------------------------------------
-
-    #[rstest]
-    #[tokio::test]
-    #[case("Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw")] // Example Raydium pool
-    async fn test_monotone(#[case] amm_key: String) -> () {
-        init_test_logger();
-
-        //
-        // Prepare inputs
-        //
-        let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
-
+    /// Constructs and updates a venue from RPC, yielding the venue plus its cache.
+    async fn build_venue(mode_config_key: Pubkey) -> (HumaVenue, RpcClientCache) {
         let rpc_url =
             env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
         let rpc = RpcClient::new(rpc_url);
+        let mode_config_account = rpc.get_account(&mode_config_key).await.unwrap();
 
-        //
-        // Fetch the venue’s account and construct the venue
-        //
-        let venue_account = rpc
-            .get_account(&amm_key)
-            .await
-            .expect("Failed to fetch AMM account");
-
-        let mut venue = RaydiumAmmVenue::from_account(&amm_key, &venue_account)
-            .expect("Failed to construct venue from account");
-
-        //
-        // Load on-chain state using the caching layer
-        //
         let cache = RpcClientCache::new(rpc);
-        venue
-            .update_state(&cache)
-            .await
-            .expect("Venue state update failed");
+        let mut venue = HumaVenue::from_account(&mode_config_key, &mode_config_account).unwrap();
+        venue.update_state(&cache).await.unwrap();
+        (venue, cache)
+    }
 
-        //
-        // Validate token metadata
-        //
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 1: deposit boundary simulation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[rstest]
+    #[tokio::test]
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    async fn test_bound_simulation(#[case] mode_config_key: Pubkey) {
+        init_test_logger();
+
+        let (venue, cache) = build_venue(mode_config_key).await;
+        let (mut litesvm, keypair) = setup_litesvm();
+        sync_clock(&mut litesvm, &cache).await;
+        create_lender_accounts(&mut litesvm, &cache, &venue, &keypair).await;
+
         let token_info = venue.get_token_info();
-        log::debug!("Loaded token info: {:#?}", token_info);
-
-        // Raydium AMMs always have 2 tokens.
         assert_eq!(token_info.len(), 2);
 
-        //
-        // For each direction (token0 → token1, token1 → token0)
-        // is monotone increasing.
-        //
-        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
+        // Deposit direction only: underlying (0) → mode mint (1).
+        let (lower, upper) = venue.bounds(0, 1).unwrap();
+        for bound in [lower, upper] {
+            let request = QuoteRequest {
+                input_mint: token_info[0].pubkey,
+                output_mint: token_info[1].pubkey,
+                amount: bound,
+                swap_type: SwapType::ExactIn,
+            };
+            let sim =
+                sim_deposit_request(&venue, &cache, request.clone(), &mut litesvm, &keypair).await;
+            let quote = venue.quote(request).unwrap();
+
+            log::debug!(
+                "Boundary={} sim={} quote={} delta={}",
+                bound,
+                sim,
+                quote.expected_output,
+                quote.expected_output.abs_diff(sim),
+            );
+
+            assert_eq!(quote.expected_output, sim);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 2: deposit random sampling simulation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[rstest]
+    #[tokio::test]
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    async fn test_random_samples(#[case] mode_config_key: Pubkey) {
+        init_test_logger();
+
+        let (venue, cache) = build_venue(mode_config_key).await;
+        let (mut litesvm, keypair) = setup_litesvm();
+        sync_clock(&mut litesvm, &cache).await;
+        create_lender_accounts(&mut litesvm, &cache, &venue, &keypair).await;
+
+        let token_info = venue.get_token_info();
+        let (lb, ub) = venue.bounds(0, 1).unwrap();
+
+        for _ in 0..50 {
+            let amount = sample_log_uniform_u64(lb, ub);
+            let request = QuoteRequest {
+                input_mint: token_info[0].pubkey,
+                output_mint: token_info[1].pubkey,
+                amount,
+                swap_type: SwapType::ExactIn,
+            };
+            let sim =
+                sim_deposit_request(&venue, &cache, request.clone(), &mut litesvm, &keypair).await;
+            let quote = venue.quote(request).unwrap();
+
+            log::debug!(
+                "amount={} sim={} quote={} delta={}",
+                amount,
+                sim,
+                quote.expected_output,
+                quote.expected_output.abs_diff(sim),
+            );
+
+            assert_eq!(quote.expected_output, sim);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 3: monotonicity (off-chain only, both directions)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[rstest]
+    #[tokio::test]
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    async fn test_monotone(#[case] mode_config_key: Pubkey) {
+        init_test_logger();
+
+        let (venue, _cache) = build_venue(mode_config_key).await;
+        let token_info = venue.get_token_info();
+        assert_eq!(token_info.len(), 2);
+
+        for (in_idx, out_idx) in [(0u8, 1u8), (1u8, 0u8)] {
             let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
-            let mut test_amounts = Vec::with_capacity(50);
+            let mut amounts: Vec<u64> = (0..50).map(|_| sample_log_uniform_u64(lb, ub)).collect();
+            amounts.sort();
 
-            for _ in 0..50 {
-                test_amounts.push(sample_log_uniform_u64(lb, ub));
-            }
-            test_amounts.sort();
-
-            let mut prev = 0;
-            for amount in test_amounts {
-                let input_mint = token_info[in_idx as usize].pubkey;
-                let output_mint = token_info[out_idx as usize].pubkey;
-
+            let mut prev = 0u64;
+            for amount in amounts {
                 let result = venue
                     .quote(QuoteRequest {
-                        input_mint,
-                        output_mint,
-                        amount: amount,
+                        input_mint: token_info[in_idx as usize].pubkey,
+                        output_mint: token_info[out_idx as usize].pubkey,
+                        amount,
                         swap_type: SwapType::ExactIn,
                     })
-                    .expect("Lower-bound quote failed");
-
-                log::debug!("quote: {:#?}", result);
-
+                    .unwrap();
                 assert!(
                     prev <= result.expected_output,
-                    "Swap function is not monotone (prev: {}) > (output: {})",
+                    "non-monotone quote: prev={} got={} (amount={})",
                     prev,
-                    result.expected_output
+                    result.expected_output,
+                    amount,
                 );
-
                 prev = result.expected_output;
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Test 4: Quoting speed
-    // -------------------------------------------------------------------------
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 4: quoting speed
+    // ─────────────────────────────────────────────────────────────────────────
 
     #[rstest]
     #[tokio::test]
-    #[case("Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw", 10_000)] // Example Raydium pool
-    async fn test_quoting_speed(#[case] amm_key: String, #[case] iterations: usize) -> () {
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN", 10_000)]
+    async fn test_quoting_speed(#[case] mode_config_key: Pubkey, #[case] iterations: usize) {
         init_test_logger();
 
-        //
-        // Prepare inputs
-        //
-        let amm_key = Pubkey::from_str(&amm_key).expect("Invalid test pubkey");
-
-        let rpc_url =
-            env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL must be set for integration tests");
-        let rpc = RpcClient::new(rpc_url);
-
-        //
-        // Fetch the venue’s account and construct the venue
-        //
-        let venue_account = rpc
-            .get_account(&amm_key)
-            .await
-            .expect("Failed to fetch AMM account");
-
-        let mut venue = RaydiumAmmVenue::from_account(&amm_key, &venue_account)
-            .expect("Failed to construct venue from account");
-
-        //
-        // Load on-chain state using the caching layer
-        //
-        let cache = RpcClientCache::new(rpc);
-        venue
-            .update_state(&cache)
-            .await
-            .expect("Venue state update failed");
-
-        //
-        // Validate token metadata
-        //
+        let (venue, _cache) = build_venue(mode_config_key).await;
         let token_info = venue.get_token_info();
-        log::debug!("Loaded token info: {:#?}", token_info);
 
-        // Raydium AMMs always have 2 tokens.
-        assert_eq!(token_info.len(), 2);
-
-        //
-        // For each direction (token0 → token1, token1 → token0)
-        // verify quoting speed requirements are met.
-        //
-        for (in_idx, out_idx) in [(0, 1), (1, 0)] {
-            let input_mint = token_info[in_idx as usize].pubkey;
-            let output_mint = token_info[out_idx as usize].pubkey;
-
+        for (in_idx, out_idx) in [(0u8, 1u8), (1u8, 0u8)] {
             let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
-            let mut test_amounts = Vec::with_capacity(iterations);
-
-            for _ in 0..iterations {
-                test_amounts.push(sample_log_uniform_u64(lb, ub));
-            }
+            let amounts: Vec<u64> = (0..iterations)
+                .map(|_| sample_log_uniform_u64(lb, ub))
+                .collect();
 
             let start = Instant::now();
-            for amount in test_amounts {
-                let result = venue
+            for amount in amounts {
+                let _ = venue
                     .quote(QuoteRequest {
-                        input_mint,
-                        output_mint,
-                        amount: amount,
+                        input_mint: token_info[in_idx as usize].pubkey,
+                        output_mint: token_info[out_idx as usize].pubkey,
+                        amount,
                         swap_type: SwapType::ExactIn,
                     })
-                    .expect("Lower-bound quote failed");
-
-                log::debug!("quote: {:#?}", result);
+                    .unwrap();
             }
-            let elapsed = start.elapsed().as_secs_f64();
-            let avg_time = elapsed / iterations as f64;
-
-            log::info!("Average quoting speed: {}", avg_time);
-
+            let avg_time = start.elapsed().as_secs_f64() / iterations as f64;
+            log::info!("avg quote time ({}→{}): {avg_time}s", in_idx, out_idx);
             assert!(
                 avg_time < 0.0001,
-                "Failed quoting speed test swapping ({}) -> ({})",
-                input_mint,
-                output_mint
+                "quote too slow ({avg_time}s) for direction ({in_idx}, {out_idx})"
             );
         }
     }

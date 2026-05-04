@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::hash::hashv;
+use solana_program::hash;
 use solana_pubkey::Pubkey;
 use spl_token::solana_program::program_pack::Pack;
 use spl_token::state::{Account as TokenAccount, Mint};
@@ -108,7 +108,7 @@ pub struct PoolConfig {
     pub _pool_owner: Pubkey,
     pub pool_owner_treasury: Pubkey,
     pub underlying_mint: Pubkey,
-    pub _pool_authority_bump: u8,
+    pub pool_authority_bump: u8,
     pub _pool_id: Pubkey,
     pub _pool_name: String,
     pub lp_config: LPConfig,
@@ -124,7 +124,7 @@ impl Default for PoolConfig {
             _pool_owner: Pubkey::default(),
             pool_owner_treasury: Pubkey::default(),
             underlying_mint: Pubkey::default(),
-            _pool_authority_bump: 0,
+            pool_authority_bump: 0,
             _pool_id: Pubkey::default(),
             _pool_name: String::new(),
             lp_config: LPConfig::default(),
@@ -402,7 +402,7 @@ pub fn anchor_instruction_discriminator(name: &str) -> [u8; DISCRIMINATOR_LEN] {
 }
 
 fn anchor_discriminator(prefix: &str, name: &str) -> [u8; DISCRIMINATOR_LEN] {
-    let hash = hashv(&[prefix.as_bytes(), name.as_bytes()]);
+    let hash = hash::hashv(&[prefix.as_bytes(), name.as_bytes()]);
     let mut out = [0u8; DISCRIMINATOR_LEN];
     out.copy_from_slice(&hash.as_ref()[..DISCRIMINATOR_LEN]);
     out

@@ -23,16 +23,9 @@ use crate::huma::constants::{
     KLEND_PROGRAM_ID, POOL_CONFIG_KEY, PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
 };
 use crate::huma::instruction::HumaInstruction;
-use crate::huma::math::{shares_for_deposit, underlying_for_instant_withdraw};
-use crate::huma::pda::{
-    derive_ata, derive_deployment_state, derive_lender_state, derive_mode_mint,
-    derive_pool_authority, derive_pool_state,
-};
-use crate::huma::state::{
-    DeploymentConfig, HumaConfig, ModeConfig, PoolConfig, PoolState, decode_anchor_account,
-    read_mint_supply, read_token_account_amount,
-};
+use crate::huma::state::{DeploymentConfig, HumaConfig, ModeConfig, PoolConfig, PoolState};
 use crate::huma::strategy::Strategy;
+use crate::huma::{math, pda, state};
 use crate::trading_venue::{
     AddressLookupTableTrait, FromAccount, QuoteRequest, QuoteResult, SwapType, TradingVenue,
     error::TradingVenueError, protocol::PoolProtocol, token_info::TokenInfo,
@@ -101,15 +94,16 @@ impl HumaVenue {
     /// Canonical constructor. Takes the keys for the (pool, mode) pair plus
     /// the already-decoded `ModeConfig` for that mode.
     pub fn new(pool_config_key: Pubkey, mode_config_key: Pubkey, mode_config: ModeConfig) -> Self {
-        let pool_state_key = derive_pool_state(&pool_config_key);
-        let pool_authority_key = derive_pool_authority(&pool_config_key);
-        let mode_mint_key = derive_mode_mint(&pool_config_key, &mode_config_key);
+        let pool_state_key = pda::derive_pool_state(&pool_config_key);
+        let mode_mint_key = pda::derive_mode_mint(&pool_config_key, &mode_config_key);
 
         Self {
             mode_config_key,
             pool_config_key,
             pool_state_key,
-            pool_authority_key,
+            // Set in `update_state` once we've read `pool_config.pool_authority_bump`.
+            // The on-chain bump may differ from `find_program_address`'s canonical bump.
+            pool_authority_key: Pubkey::default(),
             mode_mint_key,
             mode_config,
             state: None,
@@ -120,6 +114,27 @@ impl HumaVenue {
         self.state
             .as_ref()
             .ok_or(TradingVenueError::NotInitialized("venue".into()))
+    }
+
+    pub fn pool_config_key(&self) -> Pubkey {
+        self.pool_config_key
+    }
+
+    pub fn pool_state_key(&self) -> Pubkey {
+        self.pool_state_key
+    }
+
+    pub fn mode_mint_key(&self) -> Pubkey {
+        self.mode_mint_key
+    }
+
+    pub fn pool_authority_key(&self) -> Result<Pubkey, TradingVenueError> {
+        self.state()?;
+        Ok(self.pool_authority_key)
+    }
+
+    pub fn huma_config_key(&self) -> Result<Pubkey, TradingVenueError> {
+        Ok(self.state()?.pool_config.huma_config)
     }
 
     fn is_active(&self) -> bool {
@@ -160,7 +175,7 @@ impl HumaVenue {
             .pool_state
             .mode_state(s.mode_index)
             .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
-        let shares = shares_for_deposit(assets_to_serve, mode_assets, s.mode_supply).ok_or(
+        let shares = math::shares_for_deposit(assets_to_serve, mode_assets, s.mode_supply).ok_or(
             TradingVenueError::AmmMethodError("zero shares minted".into()),
         )?;
 
@@ -227,21 +242,33 @@ impl HumaVenue {
             .pool_state
             .get_available_balance(s.pool_underlying_balance, reserve_limit);
 
-        // The on-chain ix pulls `withdrawal_amount - pool_available_balance` from
-        // the strategy if the pool's own balance is short. The strategy already
-        // bounds its pullable amount by both protocol-side liquidity and the
-        // pool's own k-token redemption value, so we just compare directly.
-        let withdrawal_amount =
-            (shares as u128 * mode_assets as u128 / s.mode_supply as u128) as u64;
-        let strategy_needed = withdrawal_amount.saturating_sub(pool_available_balance);
-        if strategy_needed > s.strategy.available_liquidity_for_withdrawal() {
-            return Err(TradingVenueError::AmmMethodError(
-                "instant withdrawal exceeds strategy available liquidity".into(),
-            ));
+        // Clamp the request to what the pool + strategy can actually pay out.
+        // The on-chain ix pulls `withdrawal_amount - pool_available_balance`
+        // from the strategy when the pool's own balance is short; the strategy
+        // already bounds its withdrawable amount by both protocol-side
+        // liquidity and the pool's own k-token redemption value.
+        let max_servable_underlying =
+            pool_available_balance.saturating_add(s.strategy.available_liquidity_for_withdrawal());
+        let max_shares = if mode_assets == 0 {
+            0
+        } else {
+            (max_servable_underlying as u128 * s.mode_supply as u128 / mode_assets as u128) as u64
+        };
+        let shares_to_serve = shares.min(max_shares);
+        let partial = shares_to_serve < shares;
+
+        if shares_to_serve == 0 {
+            return Ok(QuoteResult {
+                input_mint: request.input_mint,
+                output_mint: request.output_mint,
+                amount: 0,
+                expected_output: 0,
+                not_enough_liquidity: true,
+            });
         }
 
-        let out = underlying_for_instant_withdraw(
-            shares,
+        let out = math::underlying_for_instant_withdraw(
+            shares_to_serve,
             mode_assets,
             total_assets,
             s.mode_supply,
@@ -256,20 +283,20 @@ impl HumaVenue {
         Ok(QuoteResult {
             input_mint: request.input_mint,
             output_mint: request.output_mint,
-            amount: shares,
+            amount: shares_to_serve,
             expected_output: out,
-            not_enough_liquidity: false,
+            not_enough_liquidity: partial,
         })
     }
 
     fn deposit_account_metas(&self, user: Pubkey) -> Result<Vec<AccountMeta>, TradingVenueError> {
         let s = self.state()?;
-        let depositor_underlying = derive_ata(
+        let depositor_underlying = pda::derive_ata(
             &user,
             &s.underlying_token_program,
             &s.pool_config.underlying_mint,
         );
-        let depositor_mode = derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
+        let depositor_mode = pda::derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
 
         Ok(vec![
             AccountMeta::new_readonly(user, true),
@@ -293,13 +320,13 @@ impl HumaVenue {
         user: Pubkey,
     ) -> Result<Vec<AccountMeta>, TradingVenueError> {
         let s = self.state()?;
-        let lender_state_key = derive_lender_state(&self.mode_config_key, &user);
-        let lender_underlying = derive_ata(
+        let lender_state_key = pda::derive_lender_state(&self.mode_config_key, &user);
+        let lender_underlying = pda::derive_ata(
             &user,
             &s.underlying_token_program,
             &s.pool_config.underlying_mint,
         );
-        let lender_mode = derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
+        let lender_mode = pda::derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
 
         let mut metas = vec![
             AccountMeta::new_readonly(user, true),
@@ -352,7 +379,7 @@ impl FromAccount for HumaVenue {
     where
         Self: Sized,
     {
-        let mode_config: ModeConfig = decode_anchor_account("ModeConfig", account.data())?;
+        let mode_config: ModeConfig = state::decode_anchor_account("ModeConfig", account.data())?;
         Ok(HumaVenue::new(POOL_CONFIG_KEY, *pubkey, mode_config))
     }
 }
@@ -426,9 +453,17 @@ impl TradingVenue for HumaVenue {
         ))?;
 
         let pool_config: PoolConfig =
-            decode_anchor_account("PoolConfig", pool_config_account.data())?;
+            state::decode_anchor_account("PoolConfig", pool_config_account.data())?;
         let mode_config: ModeConfig =
-            decode_anchor_account("ModeConfig", mode_config_account.data())?;
+            state::decode_anchor_account("ModeConfig", mode_config_account.data())?;
+
+        // The on-chain `pool_authority_bump` may not be the canonical bump
+        // returned by `find_program_address`, so derive using the stored bump.
+        self.pool_authority_key =
+            pda::pool_authority_with_bump(&self.pool_config_key, pool_config.pool_authority_bump)
+                .ok_or(TradingVenueError::DeserializationFailed(
+                "invalid pool_authority_bump".into(),
+            ))?;
 
         let huma_config_key = pool_config.huma_config;
         let deployment_config_key = pool_config
@@ -437,15 +472,15 @@ impl TradingVenue for HumaVenue {
             .ok_or(TradingVenueError::MissingState(
                 "PoolConfig.liquidity_source".into(),
             ))?;
-        let deployment_state_key = derive_deployment_state(&deployment_config_key);
+        let deployment_state_key = pda::derive_deployment_state(&deployment_config_key);
         // Token program is provisional until we read the underlying-mint owner
         // below. ATAs derive from the program, so re-derive after that read.
-        let pool_underlying_token_key = derive_ata(
+        let pool_underlying_token_key = pda::derive_ata(
             &self.pool_authority_key,
             &SPL_TOKEN_PROGRAM_ID,
             &pool_config.underlying_mint,
         );
-        let pool_owner_treasury_underlying_token_key = derive_ata(
+        let pool_owner_treasury_underlying_token_key = pda::derive_ata(
             &pool_config.pool_owner_treasury,
             &SPL_TOKEN_PROGRAM_ID,
             &pool_config.underlying_mint,
@@ -495,24 +530,26 @@ impl TradingVenue for HumaVenue {
             clock_account.ok_or(TradingVenueError::NoAccountFound(clock::ID.into()))?;
 
         let huma_config: HumaConfig =
-            decode_anchor_account("HumaConfig", huma_config_account.data())?;
+            state::decode_anchor_account("HumaConfig", huma_config_account.data())?;
         let deployment_config: DeploymentConfig =
-            decode_anchor_account("DeploymentConfig", deployment_config_account.data())?;
+            state::decode_anchor_account("DeploymentConfig", deployment_config_account.data())?;
         let mut strategy = Strategy::from_deployment_config(
             &deployment_config,
             pool_config.underlying_mint,
             self.pool_authority_key,
         )?;
 
-        let pool_state: PoolState = decode_anchor_account("PoolState", pool_state_account.data())?;
+        let pool_state: PoolState =
+            state::decode_anchor_account("PoolState", pool_state_account.data())?;
         let mode_index = pool_state.mode_index_for(&self.mode_config_key).ok_or(
             TradingVenueError::MissingState("mode_config_key not found in pool_state".into()),
         )?;
 
-        let mode_supply = read_mint_supply(mode_mint_account.data())?;
+        let mode_supply = state::read_mint_supply(mode_mint_account.data())?;
         let mode_token_program = *mode_mint_account.owner();
         let underlying_token_program = *underlying_mint_account.owner();
-        let pool_underlying_balance = read_token_account_amount(pool_underlying_account.data())?;
+        let pool_underlying_balance =
+            state::read_token_account_amount(pool_underlying_account.data())?;
 
         let clock: Clock = bincode::deserialize(clock_account.data())
             .map_err(|e| TradingVenueError::DeserializationFailed(format!("clock: {e}").into()))?;

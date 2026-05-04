@@ -1,20 +1,22 @@
 use solana_pubkey::Pubkey;
 
 use crate::huma::constants::{
-    ASSOCIATED_TOKEN_PROGRAM_ID, DEPLOYMENT_STATE_SEED, LENDER_STATE_SEED, MODE_MINT_SEED,
-    POOL_AUTHORITY_SEED, POOL_STATE_SEED, PROGRAM_ID,
+    DEPLOYMENT_STATE_SEED, LENDER_STATE_SEED, MODE_MINT_SEED, POOL_AUTHORITY_SEED, POOL_STATE_SEED,
+    PROGRAM_ID,
 };
 
 pub fn derive_pool_state(pool_config_key: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[POOL_STATE_SEED, pool_config_key.as_ref()], &PROGRAM_ID).0
 }
 
-pub fn derive_pool_authority(pool_config_key: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(
-        &[POOL_AUTHORITY_SEED, pool_config_key.as_ref()],
+/// Derives the pool authority using the bump stored on `PoolConfig`. Required
+/// because the on-chain bump may not be the canonical one.
+pub fn pool_authority_with_bump(pool_config_key: &Pubkey, bump: u8) -> Option<Pubkey> {
+    Pubkey::create_program_address(
+        &[POOL_AUTHORITY_SEED, pool_config_key.as_ref(), &[bump]],
         &PROGRAM_ID,
     )
-    .0
+    .ok()
 }
 
 pub fn derive_mode_mint(pool_config_key: &Pubkey, mode_config_key: &Pubkey) -> Pubkey {
@@ -46,9 +48,9 @@ pub fn derive_lender_state(mode_config_key: &Pubkey, lender: &Pubkey) -> Pubkey 
 }
 
 pub fn derive_ata(wallet: &Pubkey, token_program: &Pubkey, mint: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(
-        &[wallet.as_ref(), token_program.as_ref(), mint.as_ref()],
-        &ASSOCIATED_TOKEN_PROGRAM_ID,
+    spl_associated_token_account::get_associated_token_address_with_program_id(
+        wallet,
+        mint,
+        token_program,
     )
-    .0
 }

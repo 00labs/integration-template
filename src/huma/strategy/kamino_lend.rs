@@ -5,8 +5,7 @@ use solana_pubkey::Pubkey;
 
 use crate::account_caching::AccountsCache;
 use crate::huma::constants::{KLEND_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSVAR_INSTRUCTIONS_ID};
-use crate::huma::pda::derive_ata;
-use crate::huma::state::read_token_account_amount;
+use crate::huma::{pda, state};
 use crate::trading_venue::error::TradingVenueError;
 
 /// 8-byte Anchor discriminator prefix on the KLend Reserve account.
@@ -46,7 +45,7 @@ pub struct KaminoLendStrategy {
 impl KaminoLendStrategy {
     pub fn new(reserve: Pubkey, pool_authority: Pubkey) -> Self {
         let reserve_collateral_mint = derive_reserve_collateral_mint(&reserve);
-        let pool_authority_k_token_ata = derive_ata(
+        let pool_authority_k_token_ata = pda::derive_ata(
             &pool_authority,
             &SPL_TOKEN_PROGRAM_ID,
             &reserve_collateral_mint,
@@ -76,7 +75,7 @@ impl KaminoLendStrategy {
         let k_token_account = k_token_account.ok_or(TradingVenueError::NoAccountFound(
             self.pool_authority_k_token_ata.into(),
         ))?;
-        let k_token_balance = read_token_account_amount(k_token_account.data())?;
+        let k_token_balance = state::read_token_account_amount(k_token_account.data())?;
 
         let body = reserve_account
             .data()
