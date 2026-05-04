@@ -315,7 +315,7 @@ mod simulations {
 
     #[rstest]
     #[tokio::test]
-    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
     async fn test_bound_simulation(#[case] mode_config_key: Pubkey) {
         init_test_logger();
 
@@ -358,7 +358,7 @@ mod simulations {
 
     #[rstest]
     #[tokio::test]
-    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
     async fn test_random_samples(#[case] mode_config_key: Pubkey) {
         init_test_logger();
 
@@ -400,7 +400,7 @@ mod simulations {
 
     #[rstest]
     #[tokio::test]
-    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
     async fn test_monotone(#[case] mode_config_key: Pubkey) {
         init_test_logger();
 
@@ -441,7 +441,7 @@ mod simulations {
 
     #[rstest]
     #[tokio::test]
-    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN", 10_000)]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k", 10_000)]
     async fn test_quoting_speed(#[case] mode_config_key: Pubkey, #[case] iterations: usize) {
         init_test_logger();
 

@@ -157,12 +157,25 @@ impl HumaVenue {
             ));
         }
 
+        // Refresh mode assets with accrued yield before computing the cap, so
+        // our off-chain calculation matches the on-chain order of operations
+        // (`refresh_assets_for_mode` runs before `LiquidityCapExceeded` check).
+        let mode_assets = s
+            .pool_state
+            .mode_state(s.mode_index)
+            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
+        let total_assets = s
+            .pool_state
+            .refreshed_total_assets(s.mode_index, mode_assets);
+        let available_cap = s
+            .pool_config
+            .lp_config
+            .liquidity_cap
+            .saturating_sub(total_assets as u128) as u64;
+
         // Liquidity cap is the one case that fits `not_enough_liquidity`:
         // we can serve up to `available_cap` and let the router compose
         // the rest from elsewhere.
-        let available_cap = s
-            .pool_state
-            .available_liquidity_cap(s.pool_config.lp_config.liquidity_cap);
         if available_cap == 0 {
             return Err(TradingVenueError::AmmMethodError(
                 "liquidity cap reached".into(),
@@ -171,10 +184,6 @@ impl HumaVenue {
         let assets_to_serve = assets.min(available_cap);
         let partial = assets_to_serve < assets;
 
-        let mode_assets = s
-            .pool_state
-            .mode_state(s.mode_index)
-            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
         let shares = math::shares_for_deposit(assets_to_serve, mode_assets, s.mode_supply).ok_or(
             TradingVenueError::AmmMethodError("zero shares minted".into()),
         )?;

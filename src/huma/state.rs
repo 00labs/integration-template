@@ -303,10 +303,6 @@ impl PoolState {
             .position(|k| k == mode_config_key)
     }
 
-    pub fn available_liquidity_cap(&self, liquidity_cap: u128) -> u64 {
-        liquidity_cap.saturating_sub(self.get_pool_total_assets() as u128) as u64
-    }
-
     pub fn all_mode_assets_fresh(&self, current_ts: u64) -> bool {
         self.mode_states
             .iter()
