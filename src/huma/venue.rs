@@ -255,9 +255,13 @@ impl HumaVenue {
         // The on-chain ix pulls `withdrawal_amount - pool_available_balance`
         // from the strategy when the pool's own balance is short; the strategy
         // already bounds its withdrawable amount by both protocol-side
-        // liquidity and the pool's own k-token redemption value.
-        let max_servable_underlying =
-            pool_available_balance.saturating_add(s.strategy.available_liquidity_for_withdrawal());
+        // liquidity and the pool's own redemption value (k-tokens for Kamino,
+        // f-tokens for JupLend). Also cap by `mode_assets` — we can never
+        // redeem more underlying than this mode is backed by, and exceeding it
+        // would imply burning more shares than exist (`max_shares > mode_supply`).
+        let max_servable_underlying = pool_available_balance
+            .saturating_add(s.strategy.available_liquidity_for_withdrawal())
+            .min(mode_assets);
         let max_shares = if mode_assets == 0 {
             0
         } else {

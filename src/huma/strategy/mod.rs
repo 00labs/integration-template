@@ -39,6 +39,7 @@ impl Strategy {
             DeploymentStrategyType::JupLend => Ok(Strategy::JupLend(JupLendStrategy::new(
                 deployment_config.target_key,
                 underlying_mint,
+                pool_authority,
             ))),
             DeploymentStrategyType::KaminoLend => Ok(Strategy::KaminoLend(
                 KaminoLendStrategy::new(deployment_config.target_key, pool_authority),

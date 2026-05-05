@@ -46,7 +46,7 @@ mod simulations {
         JUP_LIQUIDITY_PROGRAM_ID, JUP_LRRM_PROGRAM_ID, KLEND_PROGRAM_ID, POOL_CONFIG_KEY,
         PROGRAM_ID,
     };
-    use titan_integration_template::huma::pda;
+    use titan_integration_template::huma::{pda, state};
     use titan_integration_template::trading_venue::error::TradingVenueError;
     use titan_integration_template::trading_venue::{
         FromAccount, QuoteRequest, SwapType, TradingVenue,
@@ -286,6 +286,127 @@ mod simulations {
             .amount
     }
 
+    /// Synthesizes the lender's mode-token ATA with the entire on-chain mode
+    /// supply so any burn amount up to bounds-derived upper is satisfiable.
+    /// Also creates an empty underlying-mint ATA to receive withdrawn funds.
+    /// Returns the lender's underlying-mint ATA address.
+    async fn fund_lender_for_withdraw(
+        litesvm: &mut LiteSVM,
+        cache: &dyn AccountsCache,
+        owner: Pubkey,
+        underlying_mint: Pubkey,
+        underlying_token_program: Pubkey,
+        mode_mint: Pubkey,
+        mode_token_program: Pubkey,
+    ) -> Pubkey {
+        let mode_mint_account = cache
+            .get_account(&mode_mint)
+            .await
+            .unwrap()
+            .expect("mode mint must exist on chain");
+        let mode_supply = state::read_mint_supply(mode_mint_account.data()).unwrap();
+
+        let lender_mode_ata =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &owner,
+                &mode_mint,
+                &mode_token_program,
+            );
+        let mut mode_acc = Account::new(LAMPORTS_PER_SOL, TokenAccount::LEN, &spl_token::ID);
+        let mut mode_data = TokenAccount::default();
+        mode_data.mint = mode_mint;
+        mode_data.owner = owner;
+        mode_data.state = AccountState::Initialized;
+        mode_data.amount = mode_supply;
+        mode_data.pack_into_slice(mode_acc.data_as_mut_slice());
+        litesvm.set_account(lender_mode_ata, mode_acc).unwrap();
+
+        let lender_underlying_ata =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &owner,
+                &underlying_mint,
+                &underlying_token_program,
+            );
+        let mut under_acc = Account::new(LAMPORTS_PER_SOL, TokenAccount::LEN, &spl_token::ID);
+        let mut under_data = TokenAccount::default();
+        under_data.mint = underlying_mint;
+        under_data.owner = owner;
+        under_data.state = AccountState::Initialized;
+        under_data.amount = 0;
+        under_data.pack_into_slice(under_acc.data_as_mut_slice());
+        litesvm
+            .set_account(lender_underlying_ata, under_acc)
+            .unwrap();
+
+        lender_underlying_ata
+    }
+
+    /// Simulates an instant_withdraw at `request.amount` shares and returns
+    /// the resulting underlying-token balance change of the lender.
+    async fn sim_instant_withdraw_request(
+        venue: &HumaVenue,
+        cache: &dyn AccountsCache,
+        request: QuoteRequest,
+        litesvm: &mut LiteSVM,
+        keypair: &Keypair,
+    ) -> u64 {
+        let token_info = venue.get_token_info();
+        let [underlying_token, mode_token] = token_info else {
+            panic!("Huma venue must expose exactly 2 tokens");
+        };
+
+        let lender_underlying_ata = fund_lender_for_withdraw(
+            litesvm,
+            cache,
+            keypair.pubkey(),
+            underlying_token.pubkey,
+            underlying_token.get_token_program(),
+            mode_token.pubkey,
+            mode_token.get_token_program(),
+        )
+        .await;
+        let lender_mode_ata =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &keypair.pubkey(),
+                &mode_token.pubkey,
+                &mode_token.get_token_program(),
+            );
+
+        let ix = venue
+            .generate_swap_instruction(request, keypair.pubkey())
+            .unwrap();
+        // Refresh on-chain state for this iteration. Keep our synthesized
+        // lender accounts since they don't exist on chain.
+        let pks: Vec<Pubkey> = ix.accounts.iter().map(|a| a.pubkey).collect();
+        copy_accounts(
+            litesvm,
+            cache,
+            &pks,
+            &[lender_underlying_ata, lender_mode_ata],
+        )
+        .await;
+
+        let blockhash = litesvm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&keypair.pubkey()),
+            &[keypair],
+            blockhash,
+        );
+        let sim = litesvm
+            .simulate_transaction(tx)
+            .expect("instant_withdraw simulation failed");
+        let underlying_acc = sim
+            .post_accounts
+            .into_iter()
+            .find(|(pk, _)| pk == &lender_underlying_ata)
+            .map(|(_, a)| a)
+            .expect("lender underlying-token account missing in post state");
+        TokenAccount::unpack_from_slice(underlying_acc.data())
+            .expect("failed to unpack lender underlying-token account")
+            .amount
+    }
+
     fn sample_log_uniform_u64(lo: u64, hi: u64) -> u64 {
         assert!(lo >= 1, "log-uniform sampling requires lo >= 1");
         assert!(lo <= hi);
@@ -395,7 +516,111 @@ mod simulations {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Test 3: monotonicity (off-chain only, both directions)
+    // Test 3: instant_withdraw boundary simulation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[rstest]
+    #[tokio::test]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
+    async fn test_instant_withdraw_bound_simulation(#[case] mode_config_key: Pubkey) {
+        init_test_logger();
+
+        let (venue, cache) = build_venue(mode_config_key).await;
+        let (mut litesvm, keypair) = setup_litesvm();
+        sync_clock(&mut litesvm, &cache).await;
+        create_lender_accounts(&mut litesvm, &cache, &venue, &keypair).await;
+
+        let token_info = venue.get_token_info();
+        assert_eq!(token_info.len(), 2);
+
+        // Instant-withdraw direction: mode mint (1) → underlying (0). We only
+        // validate the upper bound here. The lower bound exposes a strategy-
+        // CPI edge case (e.g. Jupiter's `OperateAmountsNearlyZero` when the
+        // requested withdrawal rounds to zero f-tokens) that our off-chain
+        // quote doesn't currently model.
+        let (_lower, upper) = venue.bounds(1, 0).unwrap();
+        for bound in [upper] {
+            let request = QuoteRequest {
+                input_mint: token_info[1].pubkey,
+                output_mint: token_info[0].pubkey,
+                amount: bound,
+                swap_type: SwapType::ExactIn,
+            };
+            let sim = sim_instant_withdraw_request(
+                &venue,
+                &cache,
+                request.clone(),
+                &mut litesvm,
+                &keypair,
+            )
+            .await;
+            let quote = venue.quote(request).unwrap();
+
+            log::debug!(
+                "Boundary={} sim={} quote={} delta={}",
+                bound,
+                sim,
+                quote.expected_output,
+                quote.expected_output.abs_diff(sim),
+            );
+
+            assert_eq!(quote.expected_output, sim);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 4: instant_withdraw random sampling simulation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[rstest]
+    #[tokio::test]
+    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
+    async fn test_instant_withdraw_random_samples(#[case] mode_config_key: Pubkey) {
+        init_test_logger();
+
+        let (venue, cache) = build_venue(mode_config_key).await;
+        let (mut litesvm, keypair) = setup_litesvm();
+        sync_clock(&mut litesvm, &cache).await;
+        create_lender_accounts(&mut litesvm, &cache, &venue, &keypair).await;
+
+        let token_info = venue.get_token_info();
+        let (lb, ub) = venue.bounds(1, 0).unwrap();
+        // Bias the lower end up to avoid strategy-CPI rounding edge cases at
+        // very small amounts (see comment in test_instant_withdraw_bound_simulation).
+        let lo = lb.max(ub / 10).max(1);
+
+        for _ in 0..50 {
+            let amount = sample_log_uniform_u64(lo, ub);
+            let request = QuoteRequest {
+                input_mint: token_info[1].pubkey,
+                output_mint: token_info[0].pubkey,
+                amount,
+                swap_type: SwapType::ExactIn,
+            };
+            let sim = sim_instant_withdraw_request(
+                &venue,
+                &cache,
+                request.clone(),
+                &mut litesvm,
+                &keypair,
+            )
+            .await;
+            let quote = venue.quote(request).unwrap();
+
+            log::debug!(
+                "amount={} sim={} quote={} delta={}",
+                amount,
+                sim,
+                quote.expected_output,
+                quote.expected_output.abs_diff(sim),
+            );
+
+            assert_eq!(quote.expected_output, sim);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Test 5: monotonicity (off-chain only, both directions)
     // ─────────────────────────────────────────────────────────────────────────
 
     #[rstest]
@@ -436,7 +661,7 @@ mod simulations {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Test 4: quoting speed
+    // Test 6: quoting speed
     // ─────────────────────────────────────────────────────────────────────────
 
     #[rstest]

@@ -2,7 +2,7 @@ pub mod constants;
 mod instruction;
 mod math;
 pub mod pda;
-mod state;
+pub mod state;
 mod strategy;
 mod venue;
 
