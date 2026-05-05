@@ -22,6 +22,11 @@ pub const LENDER_STATE_SEED: &[u8] = b"lender_state";
 pub const DISCRIMINATOR_LEN: usize = 8;
 
 pub const HUNDRED_PERCENT_BPS: u64 = 10_000;
+/// Kamino's `Fraction` fixed-point bit width. Several `Reserve` getters
+/// (e.g. `borrowed_amount`) return values scaled by `1 << KLEND_FRACTION_BITS`.
+/// Right-shift by this amount to recover atoms. Mirrors `FRACTION_ONE_SCALED`
+/// in `klend-interface/src/fraction.rs`.
+pub const KLEND_FRACTION_BITS: u32 = 60;
 pub const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 pub const SECONDS_IN_A_YEAR: u64 = 365 * SECONDS_PER_DAY;
 pub const MAX_ASSETS_STALENESS_SECS: u64 = 5 * SECONDS_PER_DAY;

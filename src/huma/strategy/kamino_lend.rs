@@ -4,7 +4,9 @@ use solana_instruction::AccountMeta;
 use solana_pubkey::Pubkey;
 
 use crate::account_caching::AccountsCache;
-use crate::huma::constants::{KLEND_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSVAR_INSTRUCTIONS_ID};
+use crate::huma::constants::{
+    KLEND_FRACTION_BITS, KLEND_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSVAR_INSTRUCTIONS_ID,
+};
 use crate::huma::state;
 use crate::trading_venue::error::TradingVenueError;
 
@@ -90,12 +92,15 @@ impl KaminoLendStrategy {
 
         // Underlying we'd get if we redeemed all our k-tokens at the current
         // exchange rate. exchange_rate = (available + borrowed) / collateral_total_supply.
+        // `borrowed_amount()` returns a scaled fraction; descale to atoms so it
+        // matches `available_liquidity()`'s units.
         let available = reserve.available_liquidity();
         let total_collateral = reserve.collateral_total_supply();
         let redemption_value = if total_collateral == 0 {
             0
         } else {
-            let total_supply_underlying = available as u128 + reserve.borrowed_amount();
+            let total_supply_underlying =
+                available as u128 + (reserve.borrowed_amount() >> KLEND_FRACTION_BITS);
             ((k_token_balance as u128 * total_supply_underlying) / total_collateral as u128) as u64
         };
         self.available_liquidity = available.min(redemption_value);
