@@ -8,7 +8,7 @@ use crate::huma::constants::{
     ASSOCIATED_TOKEN_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID,
     JUP_LRRM_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
-use crate::huma::{pda, state};
+use crate::huma::state;
 use crate::trading_venue::error::TradingVenueError;
 
 /// Jupiter's exchange-price scaling factor (1e12) — converts between supply
@@ -117,7 +117,11 @@ impl JupLendStrategy {
         let position_key = derive_lending_supply_position_on_liquidity(&liquidity_mint, &lending);
         let f_token_mint = derive_f_token_mint(&liquidity_mint);
         let owner_f_token_ata =
-            pda::derive_ata(&pool_authority, &SPL_TOKEN_PROGRAM_ID, &f_token_mint);
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &pool_authority,
+                &f_token_mint,
+                &SPL_TOKEN_PROGRAM_ID,
+            );
         Self {
             lending,
             liquidity_mint,
@@ -176,7 +180,11 @@ impl JupLendStrategy {
         let lending_admin = derive_lending_admin();
         let rate_model = derive_rate_model(liquidity_mint);
         let liquidity = derive_liquidity();
-        let vault = pda::derive_ata(&liquidity, underlying_token_program, liquidity_mint);
+        let vault = spl_associated_token_account::get_associated_token_address_with_program_id(
+            &liquidity,
+            liquidity_mint,
+            underlying_token_program,
+        );
         let rewards_rate_model = derive_rewards_rate_model(liquidity_mint);
 
         vec![

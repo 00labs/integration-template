@@ -9,8 +9,10 @@ pub fn derive_pool_state(pool_config_key: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[POOL_STATE_SEED, pool_config_key.as_ref()], &PROGRAM_ID).0
 }
 
-/// Derives the pool authority using the bump stored on `PoolConfig`. Required
-/// because the on-chain bump may not be the canonical one.
+/// Derives the pool authority using the bump stored on `PoolConfig`. The
+/// stored bump is canonical (Anchor populates it via `find_program_address`
+/// in `create_pool`); this just avoids re-running that derivation and
+/// mirrors how the on-chain ix uses `bump = pool_config.pool_authority_bump`.
 pub fn pool_authority_with_bump(pool_config_key: &Pubkey, bump: u8) -> Option<Pubkey> {
     Pubkey::create_program_address(
         &[POOL_AUTHORITY_SEED, pool_config_key.as_ref(), &[bump]],
@@ -45,12 +47,4 @@ pub fn derive_lender_state(mode_config_key: &Pubkey, lender: &Pubkey) -> Pubkey 
         &PROGRAM_ID,
     )
     .0
-}
-
-pub fn derive_ata(wallet: &Pubkey, token_program: &Pubkey, mint: &Pubkey) -> Pubkey {
-    spl_associated_token_account::get_associated_token_address_with_program_id(
-        wallet,
-        mint,
-        token_program,
-    )
 }

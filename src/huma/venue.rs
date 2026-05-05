@@ -101,8 +101,11 @@ impl HumaVenue {
             mode_config_key,
             pool_config_key,
             pool_state_key,
-            // Set in `update_state` once we've read `pool_config.pool_authority_bump`.
-            // The on-chain bump may differ from `find_program_address`'s canonical bump.
+            // Set in `update_state` from `pool_config.pool_authority_bump`.
+            // The stored bump is canonical (Anchor populates it from
+            // `find_program_address` in `create_pool`); using it here mirrors
+            // the on-chain `bump = pool_config.pool_authority_bump` constraint
+            // and skips an extra `find_program_address` call.
             pool_authority_key: Pubkey::default(),
             mode_mint_key,
             mode_config,
@@ -304,12 +307,18 @@ impl HumaVenue {
 
     fn deposit_account_metas(&self, user: Pubkey) -> Result<Vec<AccountMeta>, TradingVenueError> {
         let s = self.state()?;
-        let depositor_underlying = pda::derive_ata(
-            &user,
-            &s.underlying_token_program,
-            &s.pool_config.underlying_mint,
-        );
-        let depositor_mode = pda::derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
+        let depositor_underlying =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &user,
+                &s.pool_config.underlying_mint,
+                &s.underlying_token_program,
+            );
+        let depositor_mode =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &user,
+                &self.mode_mint_key,
+                &s.mode_token_program,
+            );
 
         Ok(vec![
             AccountMeta::new_readonly(user, true),
@@ -334,12 +343,18 @@ impl HumaVenue {
     ) -> Result<Vec<AccountMeta>, TradingVenueError> {
         let s = self.state()?;
         let lender_state_key = pda::derive_lender_state(&self.mode_config_key, &user);
-        let lender_underlying = pda::derive_ata(
-            &user,
-            &s.underlying_token_program,
-            &s.pool_config.underlying_mint,
-        );
-        let lender_mode = pda::derive_ata(&user, &s.mode_token_program, &self.mode_mint_key);
+        let lender_underlying =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &user,
+                &s.pool_config.underlying_mint,
+                &s.underlying_token_program,
+            );
+        let lender_mode =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &user,
+                &self.mode_mint_key,
+                &s.mode_token_program,
+            );
 
         let mut metas = vec![
             AccountMeta::new_readonly(user, true),
@@ -470,8 +485,10 @@ impl TradingVenue for HumaVenue {
         let mode_config: ModeConfig =
             state::decode_anchor_account("ModeConfig", mode_config_account.data())?;
 
-        // The on-chain `pool_authority_bump` may not be the canonical bump
-        // returned by `find_program_address`, so derive using the stored bump.
+        // The stored bump is canonical (set by Anchor in `create_pool`), but
+        // deriving from it mirrors the on-chain ix's `bump =
+        // pool_config.pool_authority_bump` constraint and avoids a second
+        // `find_program_address` call.
         self.pool_authority_key =
             pda::pool_authority_with_bump(&self.pool_config_key, pool_config.pool_authority_bump)
                 .ok_or(TradingVenueError::DeserializationFailed(
@@ -488,16 +505,18 @@ impl TradingVenue for HumaVenue {
         let deployment_state_key = pda::derive_deployment_state(&deployment_config_key);
         // Token program is provisional until we read the underlying-mint owner
         // below. ATAs derive from the program, so re-derive after that read.
-        let pool_underlying_token_key = pda::derive_ata(
-            &self.pool_authority_key,
-            &SPL_TOKEN_PROGRAM_ID,
-            &pool_config.underlying_mint,
-        );
-        let pool_owner_treasury_underlying_token_key = pda::derive_ata(
-            &pool_config.pool_owner_treasury,
-            &SPL_TOKEN_PROGRAM_ID,
-            &pool_config.underlying_mint,
-        );
+        let pool_underlying_token_key =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &self.pool_authority_key,
+                &pool_config.underlying_mint,
+                &SPL_TOKEN_PROGRAM_ID,
+            );
+        let pool_owner_treasury_underlying_token_key =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &pool_config.pool_owner_treasury,
+                &pool_config.underlying_mint,
+                &SPL_TOKEN_PROGRAM_ID,
+            );
 
         // Round 2: HumaConfig + DeploymentConfig + everything whose key is
         // derivable from PoolConfig. Only strategy-specific accounts wait
