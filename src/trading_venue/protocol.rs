@@ -12,18 +12,9 @@ use std::fmt::Display;
 /// Every AMM or custom pool that integrates with Titan must choose one of these
 /// variants (or add their own) so the router and UI can correctly identify and
 /// categorize the venue.
-///
-/// `YourPoolProtocol` is provided as a template for new integrators.
-///
-/// Protocols included here:
-/// - `YourPoolProtocol`: Example/custom protocol placeholder.
-/// - `RaydiumAMM`: Raydium’s constant-product AMM on Solana.
 #[derive(Debug, Copy, Clone)]
 pub enum PoolProtocol {
     Huma,
-
-    /// Raydium’s AMM (x*y=k) pools on Solana.
-    RaydiumAMM,
 }
 
 impl Display for PoolProtocol {
@@ -43,7 +34,6 @@ impl From<PoolProtocol> for String {
     fn from(protocol: PoolProtocol) -> Self {
         match protocol {
             PoolProtocol::Huma => "Huma".to_string(),
-            PoolProtocol::RaydiumAMM => "RaydiumAMM".to_string(),
         }
     }
 }

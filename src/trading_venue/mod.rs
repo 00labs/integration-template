@@ -162,7 +162,7 @@ pub trait TradingVenue {
             .ok_or(TradingVenueError::TokenInfoIndexError(i))
     }
 
-    /// Identify which protocol type this venue is (e.g. Raydium, Orca, Phoenix).
+    /// Identify which protocol type this venue is.
     fn protocol(&self) -> PoolProtocol;
 
     /// A human-readable label describing the venue’s protocol.
