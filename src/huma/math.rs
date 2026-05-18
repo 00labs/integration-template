@@ -1,4 +1,3 @@
-use crate::huma::constants::HUNDRED_PERCENT_BPS;
 use crate::huma::state::InstantWithdrawalConfig;
 
 /// Computes shares minted for a given deposit. Returns `None` if the pool is
@@ -16,9 +15,10 @@ pub fn shares_for_deposit(assets: u64, mode_assets: u64, mode_supply: u64) -> Op
 }
 
 /// Computes the underlying received for an instant withdrawal of `shares`,
-/// applying the post-withdrawal-tier fee. Returns `None` when the request
-/// cannot be served (insufficient supply, no fee tier matches, fee at 100%,
-/// or output rounds to zero).
+/// applying the progressive (tax-bracket-style) fee across whatever brackets
+/// the liquid-asset-ratio trajectory traverses. Returns `None` when the request
+/// cannot be served (insufficient supply, no fee tier matches the trajectory,
+/// the ending tier is disabled, or output rounds to zero).
 pub fn underlying_for_instant_withdraw(
     shares: u64,
     mode_assets: u64,
@@ -34,11 +34,11 @@ pub fn underlying_for_instant_withdraw(
     let withdrawal_amount = ((shares as u128 * mode_assets as u128) / mode_supply as u128) as u64;
     let liquid_assets_before =
         (liquid_assets_deployed.saturating_add(pool_available_balance)).min(total_assets);
-    let total_assets_after = total_assets.saturating_sub(withdrawal_amount);
-    let liquid_assets_after = liquid_assets_before.saturating_sub(withdrawal_amount);
-    let fee_bps = config.fee_bps_for(total_assets_after, liquid_assets_after)?;
-    let fee = ((withdrawal_amount as u128 * fee_bps as u128).div_ceil(HUNDRED_PERCENT_BPS as u128))
-        as u64;
+    let fee = config.compute_instant_withdrawal_fee(
+        total_assets,
+        liquid_assets_before,
+        withdrawal_amount,
+    )?;
     let out = withdrawal_amount.saturating_sub(fee);
     if out == 0 { None } else { Some(out) }
 }
