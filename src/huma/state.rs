@@ -81,24 +81,74 @@ impl Default for InstantWithdrawalConfig {
 }
 
 impl InstantWithdrawalConfig {
-    /// Returns the fee bps for the given post-withdrawal liquid-asset ratio,
-    /// or `None` if no tier matches or the resulting fee would disable withdrawal.
-    pub fn fee_bps_for(&self, total_assets: u64, liquid_assets: u64) -> Option<u16> {
-        if total_assets == 0 {
+    /// Mirrors the on-chain `InstantWithdrawalConfig::compute_instant_withdrawal_fee`.
+    /// Returns the total progressive instant-withdrawal fee in token base units, or
+    /// `None` when the withdrawal is unsupported (no bracket matches the trajectory,
+    /// the ending bracket has a 100% fee, or the withdrawal would drain the pool).
+    pub fn compute_instant_withdrawal_fee(
+        &self,
+        total_assets_before: u64,
+        liquid_assets_before: u64,
+        withdrawal_amount: u64,
+    ) -> Option<u64> {
+        if withdrawal_amount == 0 {
+            return Some(0);
+        }
+        let liquid_assets_after = liquid_assets_before.saturating_sub(withdrawal_amount);
+        let total_assets_after = total_assets_before.saturating_sub(withdrawal_amount);
+        if total_assets_after == 0 {
             return None;
         }
-        let ratio_bps =
-            (liquid_assets as u128 * HUNDRED_PERCENT_BPS as u128 / total_assets as u128) as u16;
-        for cfg in &self.instant_withdrawal_fee_configs {
-            if ratio_bps <= cfg.liquid_asset_ratio_lt_bps {
-                if cfg.fee_bps as u64 >= HUNDRED_PERCENT_BPS {
-                    return None;
-                }
-                return Some(cfg.fee_bps);
-            }
+
+        let hundred_pct = HUNDRED_PERCENT_BPS as u128;
+        let liquid_scaled_before = liquid_assets_before as u128 * hundred_pct;
+        let liquid_scaled_after = liquid_assets_after as u128 * hundred_pct;
+        let total_assets_before_u128 = total_assets_before as u128;
+        let total_assets_after_u128 = total_assets_after as u128;
+
+        let i_end = self.instant_withdrawal_fee_configs.iter().position(|c| {
+            liquid_scaled_after <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
+        })?;
+        if self.instant_withdrawal_fee_configs[i_end].fee_bps as u64 >= HUNDRED_PERCENT_BPS {
+            return None;
         }
-        None
+        let i_start = self.instant_withdrawal_fee_configs.iter().position(|c| {
+            liquid_scaled_before <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_before_u128
+        })?;
+
+        let mut total_fee: u64 = 0;
+        let mut withdrawal_amount_enter: u64 = 0;
+        for i in (i_end..=i_start).rev() {
+            let config = &self.instant_withdrawal_fee_configs[i];
+            let withdrawal_amount_exit = if i == i_end {
+                withdrawal_amount
+            } else {
+                let exit_boundary_bps =
+                    self.instant_withdrawal_fee_configs[i - 1].liquid_asset_ratio_lt_bps;
+                withdrawal_amount_at_boundary(
+                    exit_boundary_bps,
+                    total_assets_before,
+                    liquid_assets_before,
+                )
+            };
+            let slice = withdrawal_amount_exit - withdrawal_amount_enter;
+            let slice_fee = (slice as u128 * config.fee_bps as u128).div_ceil(hundred_pct) as u64;
+            total_fee += slice_fee;
+            withdrawal_amount_enter = withdrawal_amount_exit;
+        }
+        Some(total_fee)
     }
+}
+
+fn withdrawal_amount_at_boundary(
+    boundary_bps: u16,
+    total_assets_before: u64,
+    liquid_assets_before: u64,
+) -> u64 {
+    let boundary = boundary_bps as u128;
+    let hundred_pct = HUNDRED_PERCENT_BPS as u128;
+    ((liquid_assets_before as u128 * hundred_pct - boundary * total_assets_before as u128)
+        / (hundred_pct - boundary)) as u64
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Debug)]
