@@ -14,7 +14,7 @@ const NO_COMMITMENT: &str = "NO_COMMITMENT";
 
 pub enum HumaInstruction {
     Deposit { assets: u64 },
-    InstantWithdraw { shares: u64, max_fee_bps: u16 },
+    InstantWithdraw { shares: u64, max_fee: u64 },
 }
 
 #[derive(BorshSerialize)]
@@ -27,7 +27,7 @@ struct DepositArgs {
 #[derive(BorshSerialize)]
 struct InstantWithdrawArgs {
     shares: u64,
-    max_fee_bps: u16,
+    max_fee: u64,
 }
 
 impl HumaInstruction {
@@ -44,17 +44,11 @@ impl HumaInstruction {
                 .unwrap();
                 data
             }
-            HumaInstruction::InstantWithdraw {
-                shares,
-                max_fee_bps,
-            } => {
+            HumaInstruction::InstantWithdraw { shares, max_fee } => {
                 let mut data = anchor_instruction_discriminator("instant_withdraw").to_vec();
-                InstantWithdrawArgs {
-                    shares,
-                    max_fee_bps,
-                }
-                .serialize(&mut data)
-                .unwrap();
+                InstantWithdrawArgs { shares, max_fee }
+                    .serialize(&mut data)
+                    .unwrap();
                 data
             }
         }
@@ -82,12 +76,12 @@ mod tests {
     fn instant_withdraw_layout() {
         let data = HumaInstruction::InstantWithdraw {
             shares: 500,
-            max_fee_bps: 200,
+            max_fee: 200,
         }
         .pack();
-        // 8 disc + 8 u64 + 2 u16 = 18
-        assert_eq!(data.len(), 18);
+        // 8 disc + 8 u64 (shares) + 8 u64 (max_fee) = 24
+        assert_eq!(data.len(), 24);
         assert_eq!(u64::from_le_bytes(data[8..16].try_into().unwrap()), 500);
-        assert_eq!(u16::from_le_bytes(data[16..18].try_into().unwrap()), 200);
+        assert_eq!(u64::from_le_bytes(data[16..24].try_into().unwrap()), 200);
     }
 }

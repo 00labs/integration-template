@@ -48,7 +48,7 @@ mod test_construction {
     /// pairs it with the hardcoded `POOL_CONFIG_KEY` constant.
     #[rstest]
     #[tokio::test]
-    #[case("CmBSdMxM7FbYTLCWUEr96MHUZ4mzG9pTB3ZeckywDp5k")]
+    #[case("3FhoMDyKzQqxtGxnz9DfysfoGQKvgDnSFjoDGgguDCQN")]
     async fn test_construction(#[case] mode_config_key: String) {
         init_test_logger();
 

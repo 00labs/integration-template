@@ -655,13 +655,14 @@ impl TradingVenue for HumaVenue {
                 }
                 .pack(),
             }),
-            // max_fee_bps = 10_000 is the loosest bound (we already priced in fees).
+            // `max_fee` is an absolute slippage cap in underlying atoms; u64::MAX
+            // is the loosest bound (accept any fee — we already priced it in).
             SwapDirection::InstantWithdraw => Ok(Instruction {
                 program_id: PROGRAM_ID,
                 accounts: self.instant_withdraw_account_metas(user)?,
                 data: HumaInstruction::InstantWithdraw {
                     shares: request.amount,
-                    max_fee_bps: 10_000,
+                    max_fee: u64::MAX,
                 }
                 .pack(),
             }),

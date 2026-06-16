@@ -1,7 +1,7 @@
 use solana_pubkey::{Pubkey, pubkey};
 
-pub const PROGRAM_ID: Pubkey = pubkey!("8dWTgQukmAefBAp7nF8kaA1vtZrnR34Zhdmm6Fi24esy");
-pub const HUMA_PROGRAM_ID: Pubkey = pubkey!("8vr2no8dbuxamSDCMPRcZnA6toGHMmt8mGfkmdkgwia7");
+pub const PROGRAM_ID: Pubkey = pubkey!("HumaXepHnjaRCpjYTokxY4UtaJcmx41prQ8cxGmFC5fn");
+pub const HUMA_PROGRAM_ID: Pubkey = pubkey!("EVQ4s1b6N1vmWFDv8PRNc77kufBP8HcrSNWXQAhRsJq9");
 pub const JUP_LENDING_PROGRAM_ID: Pubkey = pubkey!("jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9");
 pub const JUP_LIQUIDITY_PROGRAM_ID: Pubkey = pubkey!("jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC");
 pub const JUP_LRRM_PROGRAM_ID: Pubkey = pubkey!("jup7TthsMgcR9Y3L277b8Eo9uboVSmu1utkuXHNUKar");
@@ -12,7 +12,7 @@ pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 pub const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
 pub const SYSVAR_INSTRUCTIONS_ID: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
-pub const POOL_CONFIG_KEY: Pubkey = pubkey!("4TpytVvb7FEahU3GsjQETxy6GfE8xy6NtzKps57GkfV3");
+pub const POOL_CONFIG_KEY: Pubkey = pubkey!("28hFhD21Nka3stL27a8zZ4nRLgaDVxRYwJgeEVgeakzS");
 
 pub const POOL_STATE_SEED: &[u8] = b"pool_state";
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority";
