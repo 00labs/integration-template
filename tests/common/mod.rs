@@ -21,6 +21,7 @@ use litesvm::LiteSVM;
 use solana_account::{Account, ReadableAccount, WritableAccount};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_compute_budget::compute_budget::ComputeBudget;
+use solana_instruction::Instruction;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
@@ -35,14 +36,41 @@ use assert_no_alloc::assert_no_alloc;
 
 use titan_integration_template::account_caching::AccountsCache;
 use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
+use titan_integration_template::example::RaydiumAmmVenue;
+use titan_integration_template::huma::HumaVenue;
 use titan_integration_template::trading_venue::{
     FromAccount, QuoteRequest, SwapType, TradingVenue,
 };
 
 /// Bound shared by every suite function: a venue that can be built from an
 /// account and quoted, usable across `.await` points.
-pub trait SuiteVenue: TradingVenue + FromAccount + Send + Sync {}
-impl<T: TradingVenue + FromAccount + Send + Sync> SuiteVenue for T {}
+///
+/// `presim_instructions` lets a venue declare any per-signer setup the
+/// simulation needs before a swap (e.g. initializing on-chain accounts keyed by
+/// the swap signer). It defaults to none, so the suite functions keep their
+/// `<V: SuiteVenue>` signatures unchanged — only venues with a prerequisite
+/// override it.
+pub trait SuiteVenue: TradingVenue + FromAccount + Send + Sync {
+    /// Instructions to run (paid + signed by `payer`) before simulating swaps
+    /// for `signer`. Default: none.
+    fn presim_instructions(&self, _payer: Pubkey, _signer: Pubkey) -> Vec<Instruction> {
+        Vec::new()
+    }
+}
+
+impl SuiteVenue for RaydiumAmmVenue {}
+
+impl SuiteVenue for HumaVenue {
+    fn presim_instructions(&self, payer: Pubkey, signer: Pubkey) -> Vec<Instruction> {
+        // Instant-withdraw burns the signer's mode shares and updates its
+        // `lender_state`, which must exist first. Deposit needs no provisioning,
+        // but registering the lender once up front is harmless.
+        vec![
+            self.create_lender_accounts_ix(payer, signer)
+                .expect("build create_lender_accounts_v2"),
+        ]
+    }
+}
 
 /// Per-venue configuration the test entry points supply.
 pub struct SuiteConfig {
@@ -292,6 +320,71 @@ async fn sim_quote_request(
         .amount
 }
 
+/// Execute a venue's [`SuiteVenue::presim_instructions`] inside LiteSVM, committing
+/// the accounts they create so the subsequent swap can rely on them. Loads each
+/// instruction's existing on-chain accounts from the cache first (skipping
+/// programs and the accounts these instructions will create).
+async fn run_presim_setup(
+    litesvm: &mut LiteSVM,
+    cache: &dyn AccountsCache,
+    keypair: &Keypair,
+    instructions: &[Instruction],
+) {
+    if instructions.is_empty() {
+        return;
+    }
+
+    let pks: Vec<Pubkey> = instructions
+        .iter()
+        .flat_map(|ix| ix.accounts.iter().map(|a| a.pubkey))
+        .collect();
+    let loaded = cache.get_accounts(&pks).await.unwrap();
+    for (account, key) in loaded.into_iter().zip(pks) {
+        if let Some(acc) = account
+            && !acc.executable
+        {
+            litesvm.set_account(key, acc).unwrap();
+        }
+    }
+
+    let blockhash = litesvm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&keypair.pubkey()),
+        &[keypair],
+        blockhash,
+    );
+    litesvm
+        .send_transaction(tx)
+        .expect("pre-simulation setup transaction failed");
+}
+
+/// The token-index directions the venue can **currently** quote.
+///
+/// A venue may gate a direction off at runtime — e.g. a lending pool that
+/// disables instant withdrawal while its liquid-asset ratio is below a
+/// threshold. Such a direction has no quotable range, so the suite SKIPs it
+/// (with a message) instead of failing. For an AMM both directions are always
+/// present, so this is a no-op there.
+fn available_directions(venue: &dyn TradingVenue) -> Vec<(u8, u8)> {
+    venue
+        .directions_num()
+        .into_iter()
+        .filter(|&(in_idx, out_idx)| {
+            let quotable = venue.bounds(in_idx, out_idx).is_ok();
+            if !quotable {
+                eprintln!(
+                    "SKIP {}: direction {in_idx} -> {out_idx} is not currently quotable \
+                     (the venue has gated it off — e.g. instant withdrawal disabled at low \
+                     liquidity); exercising the other directions only",
+                    current_test()
+                );
+            }
+            quotable
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // The suite. Each function is one venue test; the entry points wrap these in
 // `#[tokio::test]` against their venue type.
@@ -314,7 +407,7 @@ pub async fn construction<V: SuiteVenue>(config: &SuiteConfig) {
         "venue must expose at least two tokens"
     );
 
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lower, upper) =
             assert_no_alloc(|| venue.bounds(in_idx, out_idx)).expect("boundary search failed");
         assert!(lower < upper, "lower bound must be < upper bound");
@@ -351,7 +444,7 @@ pub async fn zero_input_spot_price<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
 
@@ -383,10 +476,12 @@ pub async fn bound_simulation<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, cache) = build_venue::<V>(rpc_url, config.pool).await;
     let (mut litesvm, keypair) = setup_litesvm(&config.programs);
     sync_clock(&cache, &mut litesvm).await;
+    let setup = venue.presim_instructions(keypair.pubkey(), keypair.pubkey());
+    run_presim_setup(&mut litesvm, &cache, &keypair, &setup).await;
 
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lower, upper) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -420,9 +515,11 @@ pub async fn random_samples<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, cache) = build_venue::<V>(rpc_url, config.pool).await;
     let (mut litesvm, keypair) = setup_litesvm(&config.programs);
     sync_clock(&cache, &mut litesvm).await;
+    let setup = venue.presim_instructions(keypair.pubkey(), keypair.pubkey());
+    run_presim_setup(&mut litesvm, &cache, &keypair, &setup).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -453,7 +550,7 @@ pub async fn monotone<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -489,7 +586,7 @@ pub async fn quoting_speed<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -524,7 +621,7 @@ pub async fn price_monotone<V: SuiteVenue>(config: &SuiteConfig) {
     assert!(venue.get_token_info().len() >= 2);
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -566,7 +663,7 @@ pub async fn mean_value_theorem<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in venue.directions_num() {
+    for (in_idx, out_idx) in available_directions(&venue) {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;

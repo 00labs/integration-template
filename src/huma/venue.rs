@@ -19,8 +19,9 @@ use solana_sysvar::clock::{self, Clock};
 
 use crate::account_caching::AccountsCache;
 use crate::huma::constants::{
-    HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID, JUP_LRRM_PROGRAM_ID,
-    KLEND_PROGRAM_ID, POOL_CONFIG_KEY, PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID, HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID,
+    JUP_LRRM_PROGRAM_ID, KLEND_PROGRAM_ID, POOL_CONFIG_KEY, PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+    SYSTEM_PROGRAM_ID,
 };
 use crate::huma::instruction::HumaInstruction;
 use crate::huma::state::{DeploymentConfig, HumaConfig, ModeConfig, PoolConfig, PoolState};
@@ -410,6 +411,49 @@ impl HumaVenue {
             &s.underlying_token_program,
         ));
         Ok(metas)
+    }
+
+    /// Build a `create_lender_accounts_v2` instruction registering `lender` as a
+    /// Huma lender on this mode, paid by `payer`.
+    ///
+    /// A lender's `lender_state` (and mode-token ATA) must exist before its first
+    /// instant withdrawal. The program treats `lender` as an unchecked, non-signer
+    /// address, so any `payer` can provision any lender — including the router's
+    /// TitanPDA, which can't sign a standalone transaction. Used by the simulation
+    /// harness to provision the swap signer before exercising the instant-withdraw
+    /// direction.
+    pub fn create_lender_accounts_ix(
+        &self,
+        payer: Pubkey,
+        lender: Pubkey,
+    ) -> Result<Instruction, TradingVenueError> {
+        let s = self.state()?;
+        let lender_state = pda::derive_lender_state(&self.mode_config_key, &lender);
+        let lender_mode_token =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &lender,
+                &self.mode_mint_key,
+                &s.mode_token_program,
+            );
+
+        Ok(Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new_readonly(lender, false),
+                AccountMeta::new_readonly(s.pool_config.huma_config, false),
+                AccountMeta::new_readonly(self.pool_config_key, false),
+                AccountMeta::new_readonly(self.pool_state_key, false),
+                AccountMeta::new_readonly(self.mode_config_key, false),
+                AccountMeta::new_readonly(self.mode_mint_key, false),
+                AccountMeta::new(lender_state, false),
+                AccountMeta::new(lender_mode_token, false),
+                AccountMeta::new_readonly(s.mode_token_program, false),
+                AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            data: HumaInstruction::CreateLenderAccountsV2.pack(),
+        })
     }
 
     fn swap_direction(

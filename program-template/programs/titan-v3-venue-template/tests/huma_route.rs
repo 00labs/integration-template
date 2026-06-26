@@ -3,12 +3,11 @@
 //! assert the simulated output matches the quote. SKIPs cleanly until
 //! `SOLANA_RPC_URL` is set and the route program is built (`make build-program`).
 //!
-//! NOTE: `run_swap_route` exercises BOTH directions. The deposit direction works
-//! with the TitanPDA as depositor, but instant-withdraw additionally requires the
-//! TitanPDA to be a registered Huma lender (a `lender_state` + mode-share
-//! balance), which a mainnet snapshot won't have for the test PDA. Until the
-//! harness provisions that, expect the withdraw leg to fail when run with RPC —
-//! see the lender-provisioning follow-up.
+//! `run_swap_route` exercises BOTH directions. Instant-withdraw needs the
+//! TitanPDA registered as a Huma lender; the shared harness provisions that up
+//! front via `RouteVenue::presim_instructions` (a `create_lender_accounts_v2`
+//! paid by the test payer —
+//! the lender need not sign), so both directions run without manual setup.
 
 mod common;
 

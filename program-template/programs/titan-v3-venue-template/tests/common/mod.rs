@@ -39,6 +39,8 @@ use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
 use titan_integration_template::swap_route::{
     ROUTE_WEIGHT_ALL, build_swap_leg, encode_swap_route_v3_data,
 };
+use titan_integration_template::example::RaydiumAmmVenue;
+use titan_integration_template::huma::HumaVenue;
 use titan_integration_template::trading_venue::error::TradingVenueError;
 use titan_integration_template::trading_venue::token_info::TokenInfo;
 use titan_integration_template::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
@@ -48,8 +50,69 @@ const SAMPLE_COUNT: usize = 10;
 
 /// A venue usable by the route suite: buildable from an account, quotable, and
 /// usable across `.await`.
-pub trait RouteVenue: TradingVenue + FromAccount + Send + Sync {}
-impl<T: TradingVenue + FromAccount + Send + Sync> RouteVenue for T {}
+///
+/// `presim_instructions` lets a venue declare per-signer setup the route
+/// simulation needs before a swap (e.g. registering the TitanPDA as a lender).
+/// It defaults to none, so `run_swap_route`'s `<V: RouteVenue>` signature stays
+/// unchanged — only venues with a prerequisite override it.
+pub trait RouteVenue: TradingVenue + FromAccount + Send + Sync {
+    /// Instructions to run (paid + signed by `payer`) before routing swaps for
+    /// `signer`. Default: none.
+    fn presim_instructions(&self, _payer: Pubkey, _signer: Pubkey) -> Vec<Instruction> {
+        Vec::new()
+    }
+}
+
+impl RouteVenue for RaydiumAmmVenue {}
+
+impl RouteVenue for HumaVenue {
+    fn presim_instructions(&self, payer: Pubkey, signer: Pubkey) -> Vec<Instruction> {
+        // The TitanPDA must be a registered Huma lender before an instant
+        // withdrawal. It can't sign a standalone tx, but `create_lender_accounts_v2`
+        // treats the lender as a non-signer, so the payer can provision it.
+        vec![
+            self.create_lender_accounts_ix(payer, signer)
+                .expect("build create_lender_accounts_v2"),
+        ]
+    }
+}
+
+/// Run a venue's [`RouteVenue::presim_instructions`] in LiteSVM, committing the
+/// accounts they create. Loads each instruction's existing on-chain accounts
+/// from the cache first (skipping programs and the accounts being created).
+async fn run_presim_setup(
+    litesvm: &mut LiteSVM,
+    cache: &dyn AccountsCache,
+    payer: &Keypair,
+    instructions: &[Instruction],
+) {
+    if instructions.is_empty() {
+        return;
+    }
+
+    let pks: Vec<Pubkey> = instructions
+        .iter()
+        .flat_map(|ix| ix.accounts.iter().map(|a| a.pubkey))
+        .collect();
+    let loaded = cache.get_accounts(&pks).await.unwrap();
+    for (account, key) in loaded.into_iter().zip(pks) {
+        if let Some(acc) = account {
+            if !acc.executable {
+                litesvm.set_account(key, acc).unwrap();
+            }
+        }
+    }
+
+    let tx = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&payer.pubkey()),
+        &[payer],
+        litesvm.latest_blockhash(),
+    );
+    litesvm
+        .send_transaction(tx)
+        .expect("pre-simulation setup transaction failed");
+}
 
 /// Per-venue configuration for the route suite.
 pub struct RouteConfig {
@@ -405,6 +468,28 @@ fn sample_amounts(lower: u64, upper: u64) -> Vec<u64> {
         .collect()
 }
 
+/// The token-index directions the venue can **currently** quote. A venue may
+/// gate a direction off at runtime (e.g. a lending pool that disables instant
+/// withdrawal at low liquidity); the route suite SKIPs such a direction instead
+/// of failing. For an AMM both directions are always present.
+fn available_directions(venue: &dyn TradingVenue) -> Vec<(u8, u8)> {
+    venue
+        .directions_num()
+        .into_iter()
+        .filter(|&(in_idx, out_idx)| {
+            let quotable = venue.bounds(in_idx, out_idx).is_ok();
+            if !quotable {
+                eprintln!(
+                    "SKIP {}: direction {in_idx} -> {out_idx} is not currently quotable \
+                     (the venue has gated it off); routing the other directions only",
+                    current_test()
+                );
+            }
+            quotable
+        })
+        .collect()
+}
+
 /// Execute `swap_route_v3` against the venue across every declared direction and
 /// a range of sizes, asserting the simulated output matches the off-chain quote.
 pub async fn run_swap_route<V: RouteVenue>(config: RouteConfig) {
@@ -462,7 +547,12 @@ pub async fn run_swap_route<V: RouteVenue>(config: RouteConfig) {
         Pubkey::find_program_address(&[TitanPda::SEED], &titan_v3_venue_template::ID);
     initialize_titan_pda(&mut litesvm, &payer, titan_pda);
 
-    for (input_index, output_index) in venue.directions_num() {
+    // Provision any per-signer accounts the venue's swap needs before routing —
+    // for Huma, the TitanPDA's lender_state ahead of an instant withdrawal.
+    let setup = venue.presim_instructions(payer.pubkey(), titan_pda);
+    run_presim_setup(&mut litesvm, &cache, &payer, &setup).await;
+
+    for (input_index, output_index) in available_directions(&venue) {
         let (lower, upper) = venue.bounds(input_index, output_index).unwrap();
         let input_mint = venue.get_token(input_index as usize).unwrap().pubkey;
         let output_mint = venue.get_token(output_index as usize).unwrap().pubkey;
