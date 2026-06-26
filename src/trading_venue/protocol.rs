@@ -12,8 +12,21 @@ use std::fmt::Display;
 /// Every AMM or custom pool that integrates with Titan must choose one of these
 /// variants (or add their own) so the router and UI can correctly identify and
 /// categorize the venue.
-#[derive(Debug, Copy, Clone)]
+///
+/// Protocols included here:
+/// - `YourPoolProtocol`: Example/custom protocol placeholder.
+/// - `RaydiumAMM`: Raydium’s constant-product AMM on Solana.
+/// - `Huma`: Huma permissionless liquidity pool.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PoolProtocol {
+    /// Example/custom protocol — integrators should rename or replace this
+    /// with their own protocol name.
+    YourPoolProtocol,
+
+    /// Raydium’s AMM (x*y=k) pools on Solana.
+    RaydiumAMM,
+
+    /// Huma permissionless liquidity pool.
     Huma,
 }
 
@@ -22,7 +35,7 @@ impl Display for PoolProtocol {
     ///
     /// Delegates to the `From<PoolProtocol> for String` implementation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", String::from(*self))
     }
 }
 
@@ -33,6 +46,8 @@ impl From<PoolProtocol> for String {
     /// exposes protocol metadata via API.
     fn from(protocol: PoolProtocol) -> Self {
         match protocol {
+            PoolProtocol::YourPoolProtocol => "YourPoolProtocol".to_string(),
+            PoolProtocol::RaydiumAMM => "RaydiumAMM".to_string(),
             PoolProtocol::Huma => "Huma".to_string(),
         }
     }
