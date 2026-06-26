@@ -1,8 +1,8 @@
 //! Shared, venue-generic swap-route suite for the on-chain template.
 //!
 //! Both `tests/example_route.rs` (the Raydium reference) and
-//! `tests/your_venue_route.rs` (your integration) call [`run_swap_route`], so
-//! the example and your venue are exercised by the same end-to-end test:
+//! `tests/huma_route.rs` (the Huma integration) call [`run_swap_route`], so
+//! the example and Huma are exercised by the same end-to-end test:
 //! quote off-chain, execute `swap_route_v3` in LiteSVM, and
 //! assert the simulated output matches the quote.
 //!

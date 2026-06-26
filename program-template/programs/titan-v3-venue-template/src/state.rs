@@ -6,9 +6,10 @@ pub const MAX_MINTS: usize = 12;
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Copy, Eq, Debug)]
 pub enum Venue {
     RaydiumAmm,
-    // FILL_IN: add your venue variant here. Include any CPI parameters the
-    // router must pass to your venue adapter, such as direction flags.
-    TemplateVenue { zero_for_one: bool },
+    /// Huma deposit / instant-withdraw leg. `is_deposit` selects which Huma
+    /// instruction the adapter builds (underlying → mode shares vs the reverse).
+    /// Must stay byte-identical to `swap_route::Venue` (see `venue_parity.rs`).
+    Huma { is_deposit: bool },
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Copy, Eq, Debug)]

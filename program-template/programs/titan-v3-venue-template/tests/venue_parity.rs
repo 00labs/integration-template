@@ -14,16 +14,12 @@ fn venue_enum_matches_route_builder() {
     let cases = [
         (ProgramVenue::RaydiumAmm, RouteBuilderVenue::RaydiumAmm),
         (
-            ProgramVenue::TemplateVenue {
-                zero_for_one: false,
-            },
-            RouteBuilderVenue::TemplateVenue {
-                zero_for_one: false,
-            },
+            ProgramVenue::Huma { is_deposit: false },
+            RouteBuilderVenue::Huma { is_deposit: false },
         ),
         (
-            ProgramVenue::TemplateVenue { zero_for_one: true },
-            RouteBuilderVenue::TemplateVenue { zero_for_one: true },
+            ProgramVenue::Huma { is_deposit: true },
+            RouteBuilderVenue::Huma { is_deposit: true },
         ),
     ];
 

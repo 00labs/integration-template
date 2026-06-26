@@ -73,7 +73,7 @@ against the venue's quote, in every declared direction. Two entry points run the
 shared suite (`tests/common/mod.rs`):
 
 - `tests/example_route.rs` — the Raydium AMM reference.
-- `tests/your_venue_route.rs` — your venue (fill in its pool + program id).
+- `tests/huma_route.rs` — the Huma integration.
 
 They **skip** unless their prerequisites are present: `SOLANA_RPC_URL`, the built
 program binary at `target/deploy/titan_v3_venue_template.so` (from `anchor

@@ -49,15 +49,10 @@ pub const ROUTE_WEIGHT_ALL: u32 = 1_000_000_000;
 #[derive(BorshSerialize, BorshDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Venue {
     RaydiumAmm,
-    // FILL_IN: add your venue variant here, in the SAME position as in
-    // `state.rs`. Include any CPI parameters the router must pass to your venue
-    // adapter, such as direction flags.
-    TemplateVenue { zero_for_one: bool },
-}
-
-#[allow(dead_code)]
-fn fill_in_route_venue_variant() -> ! {
-    todo!("add your route Venue variant in the same position as the program enum")
+    /// Huma deposit / instant-withdraw leg. `is_deposit` selects the direction
+    /// the program adapter builds: `true` = deposit (underlying → mode shares),
+    /// `false` = instant withdrawal (mode shares → underlying).
+    Huma { is_deposit: bool },
 }
 
 impl Venue {
@@ -96,11 +91,14 @@ pub fn protocol_to_venue(
 ) -> Result<Venue, TradingVenueError> {
     match venue.protocol() {
         PoolProtocol::RaydiumAMM => Ok(Venue::RaydiumAmm),
-        // P2: map Huma to its route Venue variant once the program-template
-        // CPI adapter and Huma `Venue` variant exist.
         PoolProtocol::Huma => {
-            let _ = (venue, request);
-            todo!("map Huma to its route Venue variant (P2)")
+            // Direction flag for the program adapter: a deposit spends the
+            // underlying mint (token 0) for mode shares; the reverse is an
+            // instant withdrawal.
+            let underlying = venue.get_token(0)?.pubkey;
+            Ok(Venue::Huma {
+                is_deposit: request.input_mint == underlying,
+            })
         }
     }
 }
@@ -343,15 +341,9 @@ mod tests {
     fn venue_borsh_bytes_are_stable() {
         assert_eq!(Venue::RaydiumAmm.to_borsh_bytes(), vec![0]);
         assert_eq!(
-            Venue::TemplateVenue {
-                zero_for_one: false,
-            }
-            .to_borsh_bytes(),
+            Venue::Huma { is_deposit: false }.to_borsh_bytes(),
             vec![1, 0]
         );
-        assert_eq!(
-            Venue::TemplateVenue { zero_for_one: true }.to_borsh_bytes(),
-            vec![1, 1]
-        );
+        assert_eq!(Venue::Huma { is_deposit: true }.to_borsh_bytes(), vec![1, 1]);
     }
 }
