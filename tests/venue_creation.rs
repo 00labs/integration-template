@@ -4,7 +4,7 @@
 //! when a venue's program creates a new pool. Every integration must provide a
 //! `parse_pool_creations` function that turns the decompiled instructions of a
 //! transaction into the set of pools it created (see the README requirement and
-//! the `YourVenue` stub).
+//! the Huma implementation in `tests/huma_creation.rs`).
 //!
 //! This is the worked reference for the Raydium AMM: a self-contained fixture
 //! reproducing a real Raydium `initialize2` pool-creation instruction (program

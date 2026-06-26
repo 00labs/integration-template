@@ -179,10 +179,11 @@ fn integration_scorecard() {
     // Structural integrity: every layer file must exist.
     for f in [
         "src/example/mod.rs",
-        "src/your_venue/mod.rs",
+        "src/huma/venue.rs",
+        "src/huma/creation.rs",
         "src/swap_route/mod.rs",
         "tests/venue_creation.rs",
-        "tests/your_venue_creation.rs",
+        "tests/huma_creation.rs",
         &format!("{PROGRAM_SRC}/state.rs"),
     ] {
         assert!(
@@ -196,9 +197,10 @@ fn integration_scorecard() {
     let swap_route = read("src/swap_route/mod.rs");
     let state = read(&format!("{PROGRAM_SRC}/state.rs"));
     let template_venue = read(&format!("{PROGRAM_SRC}/instructions/venues/template.rs"));
-    let your_venue = read("src/your_venue/mod.rs");
+    let huma_venue = read("src/huma/venue.rs");
+    let huma_creation = read("src/huma/creation.rs");
     let venue_creation = read("tests/venue_creation.rs");
-    let your_venue_creation = read("tests/your_venue_creation.rs");
+    let huma_creation_test = read("tests/huma_creation.rs");
 
     // Same layers, evaluated for the reference example...
     let example_done = [
@@ -208,14 +210,18 @@ fn integration_scorecard() {
         !raydium_cpi.is_empty() && state.contains("RaydiumAmm"),
         swap_route.contains("PoolProtocol::RaydiumAMM") && swap_route.contains("Venue::RaydiumAmm"),
     ];
-    // ...and for your venue (placeholders replaced / stub implemented).
+    // ...and for Huma (the venue we're integrating).
     let venue_done = [
-        !your_venue.contains("YourVenue::parse_pool_creations")
-            && !your_venue_creation.contains("FILL_IN:")
-            && !your_venue_creation.contains("todo!("),
-        !your_venue.contains("todo!("),
+        // Creation parser: implemented (no FILL_IN stub) + a fixture without todos.
+        !huma_creation.contains("FILL_IN:")
+            && !huma_creation_test.contains("FILL_IN:")
+            && !huma_creation_test.contains("todo!("),
+        // Quote layer: HumaVenue quote + marginal price implemented (no todos).
+        !huma_venue.contains("todo!("),
+        // Program layer (P2): Huma CPI module + a Venue variant.
         !state.contains("TemplateVenue")
             && !template_venue.contains("11111111111111111111111111111111"),
+        // Route builder (P2): protocol_to_venue maps Huma + a Venue variant.
         !swap_route.contains("TemplateVenue"),
     ];
 
@@ -238,12 +244,12 @@ fn integration_scorecard() {
     }
 
     if show_venue {
-        report.push_str(&render_layers("Your venue (fill these in):", venue_done));
+        report.push_str(&render_layers("Huma (fill these in):", venue_done));
 
         let fill_in = fill_in_files();
         report.push_str(&render_fill_in(&fill_in));
         report.push_str(&render_simulation());
-        report.push_str(&render_summary("Your venue", venue_done));
+        report.push_str(&render_summary("Huma", venue_done));
     }
 
     report.push_str("=============================================================\n");

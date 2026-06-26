@@ -1,8 +1,8 @@
 //! Shared, venue-generic test suite.
 //!
-//! Both `tests/example.rs` (the Raydium reference) and `tests/your_venue.rs`
-//! (your integration) run *these* functions against their venue type, so the
-//! example and your venue are held to exactly the same bar and the two suites
+//! Both `tests/example.rs` (the Raydium reference) and `tests/huma.rs`
+//! (the Huma integration) run *these* functions against their venue type, so
+//! the example and Huma are held to exactly the same bar and the two suites
 //! cannot drift.
 //!
 //! Every function gates on prerequisites and SKIPs (returns) when they're
