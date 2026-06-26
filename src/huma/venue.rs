@@ -78,18 +78,6 @@ enum SwapDirection {
     InstantWithdraw,
 }
 
-/// Builds the trivial 0-in / 0-out quote required by the trait contract for
-/// zero-amount requests.
-fn zero_quote(request: &QuoteRequest) -> QuoteResult {
-    QuoteResult {
-        input_mint: request.input_mint,
-        output_mint: request.output_mint,
-        amount: 0,
-        expected_output: 0,
-        not_enough_liquidity: false,
-    }
-}
-
 impl HumaVenue {
     /// Canonical constructor. Takes the keys for the (pool, mode) pair plus
     /// the already-decoded `ModeConfig` for that mode.
@@ -150,9 +138,29 @@ impl HumaVenue {
     fn quote_deposit(&self, request: &QuoteRequest) -> Result<QuoteResult, TradingVenueError> {
         let s = self.state()?;
 
+        // Refresh mode assets with accrued yield first: both the marginal price
+        // and the liquidity cap depend on them, and this matches the on-chain
+        // order of operations (`refresh_assets_for_mode` runs before the
+        // `LiquidityCapExceeded` check).
+        let mode_assets = s
+            .pool_state
+            .mode_state(s.mode_index)
+            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
+
+        // The deposit curve `shares = assets * supply / mode_assets` is linear,
+        // so the marginal price is constant and equals the spot price at 0.
+        let price = math::deposit_price(mode_assets, s.mode_supply);
+
         let assets = request.amount;
         if assets == 0 {
-            return Ok(zero_quote(request));
+            return Ok(QuoteResult {
+                input_mint: request.input_mint,
+                output_mint: request.output_mint,
+                amount: 0,
+                expected_output: 0,
+                not_enough_liquidity: false,
+                price,
+            });
         }
         if assets < s.pool_config.lp_config.min_deposit_amount {
             return Err(TradingVenueError::AmmMethodError(
@@ -160,13 +168,6 @@ impl HumaVenue {
             ));
         }
 
-        // Refresh mode assets with accrued yield before computing the cap, so
-        // our off-chain calculation matches the on-chain order of operations
-        // (`refresh_assets_for_mode` runs before `LiquidityCapExceeded` check).
-        let mode_assets = s
-            .pool_state
-            .mode_state(s.mode_index)
-            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
         let total_assets = s
             .pool_state
             .refreshed_total_assets(s.mode_index, mode_assets);
@@ -197,6 +198,7 @@ impl HumaVenue {
             amount: assets_to_serve,
             expected_output: shares,
             not_enough_liquidity: partial,
+            price,
         })
     }
 
@@ -205,11 +207,52 @@ impl HumaVenue {
         request: &QuoteRequest,
     ) -> Result<QuoteResult, TradingVenueError> {
         let s = self.state()?;
+        let config = &s.pool_config.instant_withdrawal_config;
+
+        // Valuation inputs the price (and the served amount) depend on. Refresh
+        // mode assets with accrued yield so this matches the on-chain order.
+        let mode_assets = s
+            .pool_state
+            .mode_state(s.mode_index)
+            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
+        let total_assets = s
+            .pool_state
+            .refreshed_total_assets(s.mode_index, mode_assets);
+        let reserve_limit = config.instant_withdrawal_reserve_limit;
+        let pool_available_balance = s
+            .pool_state
+            .get_available_balance(s.pool_underlying_balance, reserve_limit);
+
+        // Marginal price for `n` shares (raw underlying atoms per share), net of
+        // the progressive fee; `n == 0` is the spot price. Used for both the
+        // zero-input quote and the price reported at the served size.
+        let price_for = |n: u64| {
+            math::instant_withdraw_price(
+                n,
+                mode_assets,
+                total_assets,
+                s.mode_supply,
+                pool_available_balance,
+                s.pool_state.liquid_assets_deployed,
+                config,
+            )
+            .ok_or(TradingVenueError::AmmMethodError(
+                "instant withdrawal not available".into(),
+            ))
+        };
 
         let shares = request.amount;
         if shares == 0 {
-            return Ok(zero_quote(request));
+            return Ok(QuoteResult {
+                input_mint: request.input_mint,
+                output_mint: request.output_mint,
+                amount: 0,
+                expected_output: 0,
+                not_enough_liquidity: false,
+                price: price_for(0)?,
+            });
         }
+
         if !s.pool_state.all_mode_assets_fresh(s.current_ts) {
             return Err(TradingVenueError::AmmMethodError(
                 "mode assets stale".into(),
@@ -239,21 +282,6 @@ impl HumaVenue {
             ));
         }
 
-        let mode_assets = s
-            .pool_state
-            .mode_state(s.mode_index)
-            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
-        let total_assets = s
-            .pool_state
-            .refreshed_total_assets(s.mode_index, mode_assets);
-        let reserve_limit = s
-            .pool_config
-            .instant_withdrawal_config
-            .instant_withdrawal_reserve_limit;
-        let pool_available_balance = s
-            .pool_state
-            .get_available_balance(s.pool_underlying_balance, reserve_limit);
-
         // Clamp the request to what the pool + strategy can actually pay out.
         // The on-chain ix pulls `withdrawal_amount - pool_available_balance`
         // from the strategy when the pool's own balance is short; the strategy
@@ -280,6 +308,7 @@ impl HumaVenue {
                 amount: 0,
                 expected_output: 0,
                 not_enough_liquidity: true,
+                price: price_for(0)?,
             });
         }
 
@@ -290,7 +319,7 @@ impl HumaVenue {
             s.mode_supply,
             pool_available_balance,
             s.pool_state.liquid_assets_deployed,
-            &s.pool_config.instant_withdrawal_config,
+            config,
         )
         .ok_or(TradingVenueError::AmmMethodError(
             "instant withdrawal not available".into(),
@@ -302,6 +331,7 @@ impl HumaVenue {
             amount: shares_to_serve,
             expected_output: out,
             not_enough_liquidity: partial,
+            price: price_for(shares_to_serve)?,
         })
     }
 

@@ -138,6 +138,39 @@ impl InstantWithdrawalConfig {
         }
         Some(total_fee)
     }
+
+    /// The marginal instant-withdrawal fee (bps) at the *end* of the withdrawal
+    /// trajectory: the bracket the liquid-asset ratio falls into after removing
+    /// `withdrawal_amount`. This is the rate charged on the last (marginal) atom,
+    /// i.e. the slope of the progressive-fee curve at this size, and is what the
+    /// marginal quote price is derived from. Uses the same `i_end` lookup as
+    /// [`Self::compute_instant_withdrawal_fee`]; `None` mirrors it (no matching
+    /// bracket, or a fully-disabled `>= 100%` ending bracket).
+    pub fn marginal_fee_bps(
+        &self,
+        total_assets_before: u64,
+        liquid_assets_before: u64,
+        withdrawal_amount: u64,
+    ) -> Option<u16> {
+        let liquid_assets_after = liquid_assets_before.saturating_sub(withdrawal_amount);
+        let total_assets_after = total_assets_before.saturating_sub(withdrawal_amount);
+        if total_assets_after == 0 {
+            return None;
+        }
+
+        let hundred_pct = HUNDRED_PERCENT_BPS as u128;
+        let liquid_scaled_after = liquid_assets_after as u128 * hundred_pct;
+        let total_assets_after_u128 = total_assets_after as u128;
+
+        let i_end = self.instant_withdrawal_fee_configs.iter().position(|c| {
+            liquid_scaled_after <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
+        })?;
+        let fee_bps = self.instant_withdrawal_fee_configs[i_end].fee_bps;
+        if fee_bps as u64 >= HUNDRED_PERCENT_BPS {
+            return None;
+        }
+        Some(fee_bps)
+    }
 }
 
 fn withdrawal_amount_at_boundary(

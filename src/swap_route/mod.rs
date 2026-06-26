@@ -101,6 +101,12 @@ pub fn protocol_to_venue(
             let _ = (venue, request);
             todo!("map YourPoolProtocol to your Venue variant")
         }
+        // P2: map Huma to its route Venue variant once the program-template
+        // CPI adapter and Huma `Venue` variant exist.
+        PoolProtocol::Huma => {
+            let _ = (venue, request);
+            todo!("map Huma to its route Venue variant (P2)")
+        }
     }
 }
 
