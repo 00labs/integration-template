@@ -359,32 +359,6 @@ async fn run_presim_setup(
         .expect("pre-simulation setup transaction failed");
 }
 
-/// The token-index directions the venue can **currently** quote.
-///
-/// A venue may gate a direction off at runtime — e.g. a lending pool that
-/// disables instant withdrawal while its liquid-asset ratio is below a
-/// threshold. Such a direction has no quotable range, so the suite SKIPs it
-/// (with a message) instead of failing. For an AMM both directions are always
-/// present, so this is a no-op there.
-fn available_directions(venue: &dyn TradingVenue) -> Vec<(u8, u8)> {
-    venue
-        .directions_num()
-        .into_iter()
-        .filter(|&(in_idx, out_idx)| {
-            let quotable = venue.bounds(in_idx, out_idx).is_ok();
-            if !quotable {
-                eprintln!(
-                    "SKIP {}: direction {in_idx} -> {out_idx} is not currently quotable \
-                     (the venue has gated it off — e.g. instant withdrawal disabled at low \
-                     liquidity); exercising the other directions only",
-                    current_test()
-                );
-            }
-            quotable
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // The suite. Each function is one venue test; the entry points wrap these in
 // `#[tokio::test]` against their venue type.
@@ -407,7 +381,7 @@ pub async fn construction<V: SuiteVenue>(config: &SuiteConfig) {
         "venue must expose at least two tokens"
     );
 
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lower, upper) =
             assert_no_alloc(|| venue.bounds(in_idx, out_idx)).expect("boundary search failed");
         assert!(lower < upper, "lower bound must be < upper bound");
@@ -444,7 +418,7 @@ pub async fn zero_input_spot_price<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
 
@@ -481,7 +455,7 @@ pub async fn bound_simulation<V: SuiteVenue>(config: &SuiteConfig) {
 
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lower, upper) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -519,7 +493,7 @@ pub async fn random_samples<V: SuiteVenue>(config: &SuiteConfig) {
     run_presim_setup(&mut litesvm, &cache, &keypair, &setup).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -550,7 +524,7 @@ pub async fn monotone<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -586,7 +560,7 @@ pub async fn quoting_speed<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -621,7 +595,7 @@ pub async fn price_monotone<V: SuiteVenue>(config: &SuiteConfig) {
     assert!(venue.get_token_info().len() >= 2);
 
     let mut rng = test_rng();
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;
@@ -663,7 +637,7 @@ pub async fn mean_value_theorem<V: SuiteVenue>(config: &SuiteConfig) {
     let (venue, _cache) = build_venue::<V>(rpc_url, config.pool).await;
     assert!(venue.get_token_info().len() >= 2);
 
-    for (in_idx, out_idx) in available_directions(&venue) {
+    for (in_idx, out_idx) in venue.directions_num() {
         let (lb, ub) = venue.bounds(in_idx, out_idx).unwrap();
         let input_mint = venue.get_token(in_idx as usize).unwrap().pubkey;
         let output_mint = venue.get_token(out_idx as usize).unwrap().pubkey;

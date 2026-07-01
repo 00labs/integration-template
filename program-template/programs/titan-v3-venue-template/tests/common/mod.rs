@@ -468,28 +468,6 @@ fn sample_amounts(lower: u64, upper: u64) -> Vec<u64> {
         .collect()
 }
 
-/// The token-index directions the venue can **currently** quote. A venue may
-/// gate a direction off at runtime (e.g. a lending pool that disables instant
-/// withdrawal at low liquidity); the route suite SKIPs such a direction instead
-/// of failing. For an AMM both directions are always present.
-fn available_directions(venue: &dyn TradingVenue) -> Vec<(u8, u8)> {
-    venue
-        .directions_num()
-        .into_iter()
-        .filter(|&(in_idx, out_idx)| {
-            let quotable = venue.bounds(in_idx, out_idx).is_ok();
-            if !quotable {
-                eprintln!(
-                    "SKIP {}: direction {in_idx} -> {out_idx} is not currently quotable \
-                     (the venue has gated it off); routing the other directions only",
-                    current_test()
-                );
-            }
-            quotable
-        })
-        .collect()
-}
-
 /// Execute `swap_route_v3` against the venue across every declared direction and
 /// a range of sizes, asserting the simulated output matches the off-chain quote.
 pub async fn run_swap_route<V: RouteVenue>(config: RouteConfig) {
@@ -552,7 +530,7 @@ pub async fn run_swap_route<V: RouteVenue>(config: RouteConfig) {
     let setup = venue.presim_instructions(payer.pubkey(), titan_pda);
     run_presim_setup(&mut litesvm, &cache, &payer, &setup).await;
 
-    for (input_index, output_index) in available_directions(&venue) {
+    for (input_index, output_index) in venue.directions_num() {
         let (lower, upper) = venue.bounds(input_index, output_index).unwrap();
         let input_mint = venue.get_token(input_index as usize).unwrap().pubkey;
         let output_mint = venue.get_token(output_index as usize).unwrap().pubkey;
