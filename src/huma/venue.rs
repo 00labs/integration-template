@@ -19,8 +19,9 @@ use solana_sysvar::clock::{self, Clock};
 
 use crate::account_caching::AccountsCache;
 use crate::huma::constants::{
-    HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID, JUP_LRRM_PROGRAM_ID,
-    KLEND_PROGRAM_ID, POOL_CONFIG_KEY, PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID, HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID,
+    JUP_LRRM_PROGRAM_ID, KLEND_PROGRAM_ID, POOL_CONFIG_KEY, PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+    SYSTEM_PROGRAM_ID,
 };
 use crate::huma::instruction::HumaInstruction;
 use crate::huma::state::{DeploymentConfig, HumaConfig, ModeConfig, PoolConfig, PoolState};
@@ -76,18 +77,6 @@ struct InitializedState {
 enum SwapDirection {
     Deposit,
     InstantWithdraw,
-}
-
-/// Builds the trivial 0-in / 0-out quote required by the trait contract for
-/// zero-amount requests.
-fn zero_quote(request: &QuoteRequest) -> QuoteResult {
-    QuoteResult {
-        input_mint: request.input_mint,
-        output_mint: request.output_mint,
-        amount: 0,
-        expected_output: 0,
-        not_enough_liquidity: false,
-    }
 }
 
 impl HumaVenue {
@@ -150,9 +139,29 @@ impl HumaVenue {
     fn quote_deposit(&self, request: &QuoteRequest) -> Result<QuoteResult, TradingVenueError> {
         let s = self.state()?;
 
+        // Refresh mode assets with accrued yield first: both the marginal price
+        // and the liquidity cap depend on them, and this matches the on-chain
+        // order of operations (`refresh_assets_for_mode` runs before the
+        // `LiquidityCapExceeded` check).
+        let mode_assets = s
+            .pool_state
+            .mode_state(s.mode_index)
+            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
+
+        // The deposit curve `shares = assets * supply / mode_assets` is linear,
+        // so the marginal price is constant and equals the spot price at 0.
+        let price = math::deposit_price(mode_assets, s.mode_supply);
+
         let assets = request.amount;
         if assets == 0 {
-            return Ok(zero_quote(request));
+            return Ok(QuoteResult {
+                input_mint: request.input_mint,
+                output_mint: request.output_mint,
+                amount: 0,
+                expected_output: 0,
+                not_enough_liquidity: false,
+                price,
+            });
         }
         if assets < s.pool_config.lp_config.min_deposit_amount {
             return Err(TradingVenueError::AmmMethodError(
@@ -160,13 +169,6 @@ impl HumaVenue {
             ));
         }
 
-        // Refresh mode assets with accrued yield before computing the cap, so
-        // our off-chain calculation matches the on-chain order of operations
-        // (`refresh_assets_for_mode` runs before `LiquidityCapExceeded` check).
-        let mode_assets = s
-            .pool_state
-            .mode_state(s.mode_index)
-            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
         let total_assets = s
             .pool_state
             .refreshed_total_assets(s.mode_index, mode_assets);
@@ -197,6 +199,7 @@ impl HumaVenue {
             amount: assets_to_serve,
             expected_output: shares,
             not_enough_liquidity: partial,
+            price,
         })
     }
 
@@ -205,11 +208,52 @@ impl HumaVenue {
         request: &QuoteRequest,
     ) -> Result<QuoteResult, TradingVenueError> {
         let s = self.state()?;
+        let config = &s.pool_config.instant_withdrawal_config;
+
+        // Valuation inputs the price (and the served amount) depend on. Refresh
+        // mode assets with accrued yield so this matches the on-chain order.
+        let mode_assets = s
+            .pool_state
+            .mode_state(s.mode_index)
+            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
+        let total_assets = s
+            .pool_state
+            .refreshed_total_assets(s.mode_index, mode_assets);
+        let reserve_limit = config.instant_withdrawal_reserve_limit;
+        let pool_available_balance = s
+            .pool_state
+            .get_available_balance(s.pool_underlying_balance, reserve_limit);
+
+        // Marginal price for `n` shares (raw underlying atoms per share), net of
+        // the progressive fee; `n == 0` is the spot price. Used for both the
+        // zero-input quote and the price reported at the served size.
+        let price_for = |n: u64| {
+            math::instant_withdraw_price(
+                n,
+                mode_assets,
+                total_assets,
+                s.mode_supply,
+                pool_available_balance,
+                s.pool_state.liquid_assets_deployed,
+                config,
+            )
+            .ok_or(TradingVenueError::AmmMethodError(
+                "instant withdrawal not available".into(),
+            ))
+        };
 
         let shares = request.amount;
         if shares == 0 {
-            return Ok(zero_quote(request));
+            return Ok(QuoteResult {
+                input_mint: request.input_mint,
+                output_mint: request.output_mint,
+                amount: 0,
+                expected_output: 0,
+                not_enough_liquidity: false,
+                price: price_for(0)?,
+            });
         }
+
         if !s.pool_state.all_mode_assets_fresh(s.current_ts) {
             return Err(TradingVenueError::AmmMethodError(
                 "mode assets stale".into(),
@@ -239,21 +283,6 @@ impl HumaVenue {
             ));
         }
 
-        let mode_assets = s
-            .pool_state
-            .mode_state(s.mode_index)
-            .refreshed_assets(self.mode_config.periodic_apy_bps, s.current_ts);
-        let total_assets = s
-            .pool_state
-            .refreshed_total_assets(s.mode_index, mode_assets);
-        let reserve_limit = s
-            .pool_config
-            .instant_withdrawal_config
-            .instant_withdrawal_reserve_limit;
-        let pool_available_balance = s
-            .pool_state
-            .get_available_balance(s.pool_underlying_balance, reserve_limit);
-
         // Clamp the request to what the pool + strategy can actually pay out.
         // The on-chain ix pulls `withdrawal_amount - pool_available_balance`
         // from the strategy when the pool's own balance is short; the strategy
@@ -280,6 +309,7 @@ impl HumaVenue {
                 amount: 0,
                 expected_output: 0,
                 not_enough_liquidity: true,
+                price: price_for(0)?,
             });
         }
 
@@ -290,7 +320,7 @@ impl HumaVenue {
             s.mode_supply,
             pool_available_balance,
             s.pool_state.liquid_assets_deployed,
-            &s.pool_config.instant_withdrawal_config,
+            config,
         )
         .ok_or(TradingVenueError::AmmMethodError(
             "instant withdrawal not available".into(),
@@ -302,6 +332,7 @@ impl HumaVenue {
             amount: shares_to_serve,
             expected_output: out,
             not_enough_liquidity: partial,
+            price: price_for(shares_to_serve)?,
         })
     }
 
@@ -380,6 +411,49 @@ impl HumaVenue {
             &s.underlying_token_program,
         ));
         Ok(metas)
+    }
+
+    /// Build a `create_lender_accounts_v2` instruction registering `lender` as a
+    /// Huma lender on this mode, paid by `payer`.
+    ///
+    /// A lender's `lender_state` (and mode-token ATA) must exist before its first
+    /// instant withdrawal. The program treats `lender` as an unchecked, non-signer
+    /// address, so any `payer` can provision any lender — including the router's
+    /// TitanPDA, which can't sign a standalone transaction. Used by the simulation
+    /// harness to provision the swap signer before exercising the instant-withdraw
+    /// direction.
+    pub fn create_lender_accounts_ix(
+        &self,
+        payer: Pubkey,
+        lender: Pubkey,
+    ) -> Result<Instruction, TradingVenueError> {
+        let s = self.state()?;
+        let lender_state = pda::derive_lender_state(&self.mode_config_key, &lender);
+        let lender_mode_token =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &lender,
+                &self.mode_mint_key,
+                &s.mode_token_program,
+            );
+
+        Ok(Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new_readonly(lender, false),
+                AccountMeta::new_readonly(s.pool_config.huma_config, false),
+                AccountMeta::new_readonly(self.pool_config_key, false),
+                AccountMeta::new_readonly(self.pool_state_key, false),
+                AccountMeta::new_readonly(self.mode_config_key, false),
+                AccountMeta::new_readonly(self.mode_mint_key, false),
+                AccountMeta::new(lender_state, false),
+                AccountMeta::new(lender_mode_token, false),
+                AccountMeta::new_readonly(s.mode_token_program, false),
+                AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            data: HumaInstruction::CreateLenderAccountsV2.pack(),
+        })
     }
 
     fn swap_direction(

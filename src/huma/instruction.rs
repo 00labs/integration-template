@@ -15,6 +15,9 @@ const NO_COMMITMENT: &str = "NO_COMMITMENT";
 pub enum HumaInstruction {
     Deposit { assets: u64 },
     InstantWithdraw { shares: u64, max_fee: u64 },
+    /// Provision a lender's accounts on a mode. Takes no args (data is just the
+    /// discriminator); the lender is an account, not an argument.
+    CreateLenderAccountsV2,
 }
 
 #[derive(BorshSerialize)]
@@ -51,6 +54,9 @@ impl HumaInstruction {
                     .unwrap();
                 data
             }
+            HumaInstruction::CreateLenderAccountsV2 => {
+                anchor_instruction_discriminator("create_lender_accounts_v2").to_vec()
+            }
         }
     }
 }
@@ -83,5 +89,13 @@ mod tests {
         assert_eq!(data.len(), 24);
         assert_eq!(u64::from_le_bytes(data[8..16].try_into().unwrap()), 500);
         assert_eq!(u64::from_le_bytes(data[16..24].try_into().unwrap()), 200);
+    }
+
+    #[test]
+    fn create_lender_accounts_layout() {
+        let data = HumaInstruction::CreateLenderAccountsV2.pack();
+        // discriminator only, no args
+        assert_eq!(data.len(), 8);
+        assert_eq!(data, anchor_instruction_discriminator("create_lender_accounts_v2"));
     }
 }
