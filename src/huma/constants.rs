@@ -1,6 +1,7 @@
 use solana_pubkey::{Pubkey, pubkey};
 
-pub const PROGRAM_ID: Pubkey = pubkey!("HumaXepHnjaRCpjYTokxY4UtaJcmx41prQ8cxGmFC5fn");
+pub const VAULT_PROGRAM_ID: Pubkey = pubkey!("HumaXepHnjaRCpjYTokxY4UtaJcmx41prQ8cxGmFC5fn");
+pub const STRATEGY_PROGRAM_ID: Pubkey = pubkey!("6QT4FcvVYvq9DPFQNQhfsBq6uoWrdxaH7rssUqvy7MPd");
 pub const HUMA_PROGRAM_ID: Pubkey = pubkey!("EVQ4s1b6N1vmWFDv8PRNc77kufBP8HcrSNWXQAhRsJq9");
 pub const JUP_LENDING_PROGRAM_ID: Pubkey = pubkey!("jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9");
 pub const JUP_LIQUIDITY_PROGRAM_ID: Pubkey = pubkey!("jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC");
@@ -13,12 +14,14 @@ pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
 pub const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
 pub const SYSVAR_INSTRUCTIONS_ID: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
 pub const POOL_CONFIG_KEY: Pubkey = pubkey!("28hFhD21Nka3stL27a8zZ4nRLgaDVxRYwJgeEVgeakzS");
+pub const STRATEGY_CONFIG_KEY: Pubkey = pubkey!("6QT4FcvVYvq9DPFQNQhfsBq6uoWrduM8tgUu15q2WdV1");
 
 pub const POOL_STATE_SEED: &[u8] = b"pool_state";
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority";
 pub const MODE_MINT_SEED: &[u8] = b"mode_mint";
 pub const DEPLOYMENT_STATE_SEED: &[u8] = b"deployment_state";
 pub const LENDER_STATE_SEED: &[u8] = b"lender_state";
+pub const STRATEGY_STATE_SEED: &[u8] = b"strategy_state";
 
 pub const DISCRIMINATOR_LEN: usize = 8;
 

@@ -7,7 +7,7 @@
 //! [`crate::trading_venue::venue_creation`] for the contract and
 //! `tests/huma_creation.rs` for the fixture test.
 
-use crate::huma::constants::PROGRAM_ID;
+use crate::huma::constants::VAULT_PROGRAM_ID;
 use crate::trading_venue::protocol::PoolProtocol;
 use crate::trading_venue::venue_creation::{ParsedInstruction, PoolCreation};
 
@@ -30,7 +30,7 @@ const MODE_MINT_INDEX: usize = 6;
 pub fn parse_pool_creations(instructions: &[ParsedInstruction]) -> Vec<PoolCreation> {
     instructions
         .iter()
-        .filter(|ix| ix.program_id == PROGRAM_ID)
+        .filter(|ix| ix.program_id == VAULT_PROGRAM_ID)
         .filter(|ix| ix.data.get(..8) == Some(&ADD_MODE_DISCRIMINATOR[..]))
         .filter_map(|ix| {
             // Defensive: a real `add_mode` always carries these accounts, but

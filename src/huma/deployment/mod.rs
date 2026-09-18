@@ -7,11 +7,11 @@ use solana_instruction::AccountMeta;
 use solana_pubkey::Pubkey;
 
 use crate::account_caching::AccountsCache;
-use crate::huma::state::{DeploymentConfig, DeploymentStrategyType};
+use crate::huma::state::DeploymentStrategyType;
 use crate::trading_venue::error::TradingVenueError;
 
 #[derive(Clone)]
-pub enum Strategy {
+pub enum Deployment {
     JupLend(JupLendStrategy),
     KaminoLend(KaminoLendStrategy),
 }
@@ -19,30 +19,31 @@ pub enum Strategy {
 macro_rules! dispatch {
     ($self:expr, $method:ident $(, $arg:expr)*) => {
         match $self {
-            Strategy::JupLend(s) => s.$method($($arg),*),
-            Strategy::KaminoLend(s) => s.$method($($arg),*),
+            Deployment::JupLend(s) => s.$method($($arg),*),
+            Deployment::KaminoLend(s) => s.$method($($arg),*),
         }
     };
 }
 
-impl Strategy {
-    /// Builds a routable strategy from an on-chain `DeploymentConfig`. Manual
-    /// strategies have no CPI path for instant withdrawals and are rejected.
-    /// `pool_authority` is needed to derive the strategy-specific accounts the
-    /// pool holds (e.g. Kamino's k-token ATA).
-    pub fn from_deployment_config(
-        deployment_config: &DeploymentConfig,
+impl Deployment {
+    /// Builds a routable venue for a deployment target. Manual targets have no CPI path
+    /// for instant withdrawals and are rejected. `position_owner` derives the accounts
+    /// that hold the position (e.g. Kamino's k-token ATA) — the pool authority before a
+    /// mode is cut over, the strategy authority after.
+    pub fn new(
+        strategy_type: &DeploymentStrategyType,
+        target_key: Pubkey,
         underlying_mint: Pubkey,
-        pool_authority: Pubkey,
+        position_owner: Pubkey,
     ) -> Result<Self, TradingVenueError> {
-        match deployment_config.strategy_type {
-            DeploymentStrategyType::JupLend => Ok(Strategy::JupLend(JupLendStrategy::new(
-                deployment_config.target_key,
+        match strategy_type {
+            DeploymentStrategyType::JupLend => Ok(Deployment::JupLend(JupLendStrategy::new(
+                target_key,
                 underlying_mint,
-                pool_authority,
+                position_owner,
             ))),
-            DeploymentStrategyType::KaminoLend => Ok(Strategy::KaminoLend(
-                KaminoLendStrategy::new(deployment_config.target_key, pool_authority),
+            DeploymentStrategyType::KaminoLend => Ok(Deployment::KaminoLend(
+                KaminoLendStrategy::new(target_key, position_owner),
             )),
             DeploymentStrategyType::Manual => Err(TradingVenueError::UnsupportedVenue(
                 "manual strategy is not routable".into(),
@@ -56,8 +57,8 @@ impl Strategy {
 
     pub async fn update(&mut self, cache: &dyn AccountsCache) -> Result<(), TradingVenueError> {
         match self {
-            Strategy::JupLend(s) => s.update(cache).await,
-            Strategy::KaminoLend(s) => s.update(cache).await,
+            Deployment::JupLend(s) => s.update(cache).await,
+            Deployment::KaminoLend(s) => s.update(cache).await,
         }
     }
 

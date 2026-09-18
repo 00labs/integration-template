@@ -106,25 +106,33 @@ impl InstantWithdrawalConfig {
         let total_assets_before_u128 = total_assets_before as u128;
         let total_assets_after_u128 = total_assets_after as u128;
 
-        let i_end = self.instant_withdrawal_fee_configs.iter().position(|c| {
-            liquid_scaled_after <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
-        })?;
+        let i_end = self
+            .instant_withdrawal_fee_configs
+            .iter()
+            .position(|tier| {
+                liquid_scaled_after
+                    <= tier.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
+            })?;
         if self.instant_withdrawal_fee_configs[i_end].fee_bps as u64 >= HUNDRED_PERCENT_BPS {
             return None;
         }
-        let i_start = self.instant_withdrawal_fee_configs.iter().position(|c| {
-            liquid_scaled_before <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_before_u128
-        })?;
+        let i_start = self
+            .instant_withdrawal_fee_configs
+            .iter()
+            .position(|tier| {
+                liquid_scaled_before
+                    <= tier.liquid_asset_ratio_lt_bps as u128 * total_assets_before_u128
+            })?;
 
         let mut total_fee: u64 = 0;
         let mut withdrawal_amount_enter: u64 = 0;
-        for i in (i_end..=i_start).rev() {
-            let config = &self.instant_withdrawal_fee_configs[i];
-            let withdrawal_amount_exit = if i == i_end {
+        for index in (i_end..=i_start).rev() {
+            let config = &self.instant_withdrawal_fee_configs[index];
+            let withdrawal_amount_exit = if index == i_end {
                 withdrawal_amount
             } else {
                 let exit_boundary_bps =
-                    self.instant_withdrawal_fee_configs[i - 1].liquid_asset_ratio_lt_bps;
+                    self.instant_withdrawal_fee_configs[index - 1].liquid_asset_ratio_lt_bps;
                 withdrawal_amount_at_boundary(
                     exit_boundary_bps,
                     total_assets_before,
@@ -162,9 +170,13 @@ impl InstantWithdrawalConfig {
         let liquid_scaled_after = liquid_assets_after as u128 * hundred_pct;
         let total_assets_after_u128 = total_assets_after as u128;
 
-        let i_end = self.instant_withdrawal_fee_configs.iter().position(|c| {
-            liquid_scaled_after <= c.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
-        })?;
+        let i_end = self
+            .instant_withdrawal_fee_configs
+            .iter()
+            .position(|tier| {
+                liquid_scaled_after
+                    <= tier.liquid_asset_ratio_lt_bps as u128 * total_assets_after_u128
+            })?;
         let fee_bps = self.instant_withdrawal_fee_configs[i_end].fee_bps;
         if fee_bps as u64 >= HUNDRED_PERCENT_BPS {
             return None;
@@ -383,13 +395,13 @@ impl PoolState {
     pub fn mode_index_for(&self, mode_config_key: &Pubkey) -> Option<usize> {
         self.mode_config_keys
             .iter()
-            .position(|k| k == mode_config_key)
+            .position(|key| key == mode_config_key)
     }
 
     pub fn all_mode_assets_fresh(&self, current_ts: u64) -> bool {
-        self.mode_states
-            .iter()
-            .all(|s| current_ts.saturating_sub(s.assets_refreshed_at) <= MAX_ASSETS_STALENESS_SECS)
+        self.mode_states.iter().all(|mode| {
+            current_ts.saturating_sub(mode.assets_refreshed_at) <= MAX_ASSETS_STALENESS_SECS
+        })
     }
 
     pub fn mode_state(&self, mode_index: usize) -> &ModeState {
@@ -409,7 +421,10 @@ impl PoolState {
     }
 
     fn get_pool_total_assets(&self) -> u64 {
-        self.mode_states.iter().map(|s| s.assets).sum::<u128>() as u64
+        self.mode_states
+            .iter()
+            .map(|mode| mode.assets)
+            .sum::<u128>() as u64
     }
 }
 
@@ -421,7 +436,8 @@ pub struct ModeConfig {
     pub _name: String,
     pub _target_apy_bps: u16,
     pub periodic_apy_bps: f64,
-    pub _reserved: [u8; 160],
+    pub strategy_note_mint: Pubkey,
+    pub _reserved: [u8; 128],
 }
 
 impl Default for ModeConfig {
@@ -433,8 +449,17 @@ impl Default for ModeConfig {
             _name: String::new(),
             _target_apy_bps: 0,
             periodic_apy_bps: 0.0,
-            _reserved: [0u8; 160],
+            strategy_note_mint: Pubkey::default(),
+            _reserved: [0u8; 128],
         }
+    }
+}
+
+impl ModeConfig {
+    /// Whether the mode has been cut over to the Strategy layer, mirroring the
+    /// on-chain `ModeConfig::is_migrated`.
+    pub fn is_migrated(&self) -> bool {
+        self.strategy_note_mint != Pubkey::default()
     }
 }
 
@@ -455,21 +480,21 @@ pub fn decode_anchor_account<T: BorshDeserialize>(
             format!("invalid discriminator for {account_name}").into(),
         ));
     }
-    T::deserialize(&mut &data[DISCRIMINATOR_LEN..]).map_err(|e| {
-        TradingVenueError::DeserializationFailed(format!("{account_name}: {e}").into())
+    T::deserialize(&mut &data[DISCRIMINATOR_LEN..]).map_err(|err| {
+        TradingVenueError::DeserializationFailed(format!("{account_name}: {err}").into())
     })
 }
 
 pub fn read_token_account_amount(data: &[u8]) -> Result<u64, TradingVenueError> {
     TokenAccount::unpack_unchecked(data)
-        .map(|a| a.amount)
-        .map_err(|e| TradingVenueError::DeserializationFailed(e.to_string().into()))
+        .map(|account| account.amount)
+        .map_err(|err| TradingVenueError::DeserializationFailed(err.to_string().into()))
 }
 
 pub fn read_mint_supply(data: &[u8]) -> Result<u64, TradingVenueError> {
     Mint::unpack_unchecked(data)
-        .map(|m| m.supply)
-        .map_err(|e| TradingVenueError::DeserializationFailed(e.to_string().into()))
+        .map(|mint| mint.supply)
+        .map_err(|err| TradingVenueError::DeserializationFailed(err.to_string().into()))
 }
 
 pub fn anchor_account_discriminator(name: &str) -> [u8; DISCRIMINATOR_LEN] {

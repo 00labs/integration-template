@@ -12,7 +12,7 @@ use solana_pubkey::{Pubkey, pubkey};
 use titan_integration_template::huma::HumaVenue;
 use titan_integration_template::huma::constants::{
     HUMA_PROGRAM_ID, JUP_LENDING_PROGRAM_ID, JUP_LIQUIDITY_PROGRAM_ID, JUP_LRRM_PROGRAM_ID,
-    KLEND_PROGRAM_ID, PROGRAM_ID,
+    KLEND_PROGRAM_ID, VAULT_PROGRAM_ID,
 };
 
 // Installs the allocation guard that powers the construction test's
@@ -33,7 +33,7 @@ fn pool() -> Pubkey {
 /// be dumped to `programs/<id>.so` (see `make dump-programs`).
 fn programs() -> Vec<Pubkey> {
     vec![
-        PROGRAM_ID,
+        VAULT_PROGRAM_ID,
         HUMA_PROGRAM_ID,
         JUP_LENDING_PROGRAM_ID,
         JUP_LIQUIDITY_PROGRAM_ID,

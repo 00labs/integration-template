@@ -221,19 +221,27 @@ mod tests {
         // Sweep across several brackets: positive and non-increasing. (Starts
         // above the dust floor where the div_ceil fee would consume the whole
         // tiny output — the real `bounds()` excludes that region.)
-        let samples = [10_000u64, 50_000, 150_000, 250_000, 350_000, 450_000, 520_000];
+        let samples = [
+            10_000u64, 50_000, 150_000, 250_000, 350_000, 450_000, 520_000,
+        ];
         let mut prev = f64::INFINITY;
-        for &s in &samples {
-            let p = price(s);
-            assert!(p > 0.0, "price must be positive at {s}, got {p}");
-            assert!(p <= prev + 1e-9, "price rose: {prev} -> {p} at {s}");
-            prev = p;
+        for &sample in &samples {
+            let quoted_price = price(sample);
+            assert!(
+                quoted_price > 0.0,
+                "price must be positive at {sample}, got {quoted_price}"
+            );
+            assert!(
+                quoted_price <= prev + 1e-9,
+                "price rose: {prev} -> {quoted_price} at {sample}"
+            );
+            prev = quoted_price;
         }
 
         // Mean value theorem: the realized chord is bracketed by the endpoint
         // prices, with a couple atoms of slack for fee rounding (div_ceil).
-        for w in samples.windows(2) {
-            let (a, b) = (w[0], w[1]);
+        for window in samples.windows(2) {
+            let (a, b) = (window[0], window[1]);
             let chord = (out(b) as f64 - out(a) as f64) / (b - a) as f64;
             let (pa, pb) = (price(a), price(b)); // pa >= pb
             let atol = 2.0 / (b - a) as f64;
