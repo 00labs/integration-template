@@ -822,7 +822,6 @@ impl HumaVenue {
             AccountMeta::new(self.pool_authority_key, false),
             AccountMeta::new(venue_state.pool_underlying_token_key, false),
             AccountMeta::new(lender_underlying, false),
-            AccountMeta::new(venue_state.pool_owner_treasury_underlying_token_key, false),
             AccountMeta::new(lender_mode, false),
             AccountMeta::new_readonly(venue_state.underlying_token_program, false),
             AccountMeta::new_readonly(venue_state.mode_token_program, false),
@@ -839,11 +838,15 @@ impl HumaVenue {
                     ));
                 }
             }
-            // Pre-cutover the pool serves the withdrawal itself, and its liquidity-source pair
-            // leads the venue accounts it pulls through. Never send the pair on the migrated
-            // arm above: the vault forwards this list whole, so the strategy would read the
-            // first two as its own venue accounts.
+            // Pre-cutover the pool serves the withdrawal itself: its treasury takes the fee and
+            // its liquidity-source pair leads the venue accounts it pulls through. Never send
+            // any of these on the migrated arm above: the vault forwards this list whole, so the
+            // strategy would read them as its own venue accounts.
             None => {
+                metas.push(AccountMeta::new(
+                    venue_state.pool_owner_treasury_underlying_token_key,
+                    false,
+                ));
                 metas.push(AccountMeta::new_readonly(
                     venue_state.deployment_config_key,
                     false,
