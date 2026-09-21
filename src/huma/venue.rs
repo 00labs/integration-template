@@ -817,8 +817,6 @@ impl HumaVenue {
             AccountMeta::new(self.pool_state_key, false),
             AccountMeta::new_readonly(self.mode_config_key, false),
             AccountMeta::new(self.mode_mint_key, false),
-            AccountMeta::new_readonly(venue_state.deployment_config_key, false),
-            AccountMeta::new(venue_state.deployment_state_key, false),
             AccountMeta::new(lender_state_key, false),
             AccountMeta::new_readonly(venue_state.pool_config.underlying_mint, false),
             AccountMeta::new(self.pool_authority_key, false),
@@ -841,10 +839,21 @@ impl HumaVenue {
                     ));
                 }
             }
-            None => metas.extend(venue_state.deployment.instant_withdraw_remaining_accounts(
-                &self.pool_authority_key,
-                &venue_state.underlying_token_program,
-            )),
+            // Pre-cutover the pool serves the withdrawal itself, and its liquidity-source pair
+            // leads the venue accounts it pulls through. Never send the pair on the migrated
+            // arm above: the vault forwards this list whole, so the strategy would read the
+            // first two as its own venue accounts.
+            None => {
+                metas.push(AccountMeta::new_readonly(
+                    venue_state.deployment_config_key,
+                    false,
+                ));
+                metas.push(AccountMeta::new(venue_state.deployment_state_key, false));
+                metas.extend(venue_state.deployment.instant_withdraw_remaining_accounts(
+                    &self.pool_authority_key,
+                    &venue_state.underlying_token_program,
+                ));
+            }
         }
         Ok(metas)
     }
