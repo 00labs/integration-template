@@ -29,9 +29,11 @@ use crate::huma::instruction::HumaInstruction;
 use crate::huma::state::{DeploymentConfig, HumaConfig, ModeConfig, PoolConfig, PoolState};
 use crate::huma::strategy::{self, StrategyConfig, StrategyModeState, StrategyState};
 use crate::huma::{math, pda, state};
+use crate::trading_venue::error::TradingVenueError;
+use crate::trading_venue::protocol::PoolProtocol;
+use crate::trading_venue::token_info::TokenInfo;
 use crate::trading_venue::{
     AddressLookupTableTrait, FromAccount, QuoteRequest, QuoteResult, SwapType, TradingVenue,
-    error::TradingVenueError, protocol::PoolProtocol, token_info::TokenInfo,
 };
 
 #[derive(Clone)]

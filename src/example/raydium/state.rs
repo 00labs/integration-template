@@ -1,7 +1,8 @@
 //! State transition types
 use arrayref::{array_mut_ref, array_ref, array_refs, mut_array_refs};
 use bytemuck::{Pod, Zeroable, from_bytes};
-use safe_transmute::{self, trivial::TriviallyTransmutable};
+use safe_transmute::trivial::TriviallyTransmutable;
+use safe_transmute::{self};
 use solana_program_pack::{IsInitialized, Pack, Sealed};
 use solana_pubkey::Pubkey;
 use solana_sysvar::__private::ProgramError;

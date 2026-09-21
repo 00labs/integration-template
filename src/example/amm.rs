@@ -1,20 +1,17 @@
+use std::convert::TryFrom;
+
 use arrayref::array_ref;
 use safe_transmute::{transmute_one_pedantic, transmute_to_bytes};
 use solana_account::{Account, ReadableAccount};
 use solana_instruction::Instruction;
 use solana_program::program_pack::Pack;
 use solana_pubkey::Pubkey;
-use std::convert::TryFrom;
 
-use crate::{
-    example::raydium::{
-        self,
-        math::{CheckedCeilDiv, SwapDirection, U128},
-        processor::{self, AUTHORITY_AMM},
-        state::{Loadable, TEN_THOUSAND},
-    },
-    trading_venue::error::TradingVenueError,
-};
+use crate::example::raydium::math::{CheckedCeilDiv, SwapDirection, U128};
+use crate::example::raydium::processor::{self, AUTHORITY_AMM};
+use crate::example::raydium::state::{Loadable, TEN_THOUSAND};
+use crate::example::raydium::{self};
+use crate::trading_venue::error::TradingVenueError;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AmmKeys {

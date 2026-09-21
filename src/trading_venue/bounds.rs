@@ -23,7 +23,8 @@
 //!
 //! This module is protocol-agnostic and works for any Titan-integrated AMM.
 
-use crate::trading_venue::{QuoteResult, error::TradingVenueError};
+use crate::trading_venue::QuoteResult;
+use crate::trading_venue::error::TradingVenueError;
 
 /// Each step in exponential search is scaled by this factor.
 const SCALING_FACTOR: u64 = 2;

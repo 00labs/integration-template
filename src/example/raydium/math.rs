@@ -1,9 +1,9 @@
 use num_traits::CheckedDiv;
 use uint::construct_uint;
 
+use super::error::AmmError;
+use super::state::AmmInfo;
 use crate::trading_venue::error::TradingVenueError;
-
-use super::{error::AmmError, state::AmmInfo};
 
 construct_uint! {
     pub struct U256(4);

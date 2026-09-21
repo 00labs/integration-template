@@ -1,10 +1,10 @@
 pub mod constants;
 pub mod creation;
+mod deployment;
 mod instruction;
 mod math;
 pub mod pda;
 pub mod state;
-mod deployment;
 pub mod strategy;
 mod venue;
 

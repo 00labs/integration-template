@@ -20,13 +20,11 @@ use solana_account::Account;
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
-use crate::{
-    account_caching::AccountsCache,
-    trading_venue::{
-        bounds::find_boundaries, error::TradingVenueError, protocol::PoolProtocol,
-        token_info::TokenInfo,
-    },
-};
+use crate::account_caching::AccountsCache;
+use crate::trading_venue::bounds::find_boundaries;
+use crate::trading_venue::error::TradingVenueError;
+use crate::trading_venue::protocol::PoolProtocol;
+use crate::trading_venue::token_info::TokenInfo;
 
 /// Describes which type of swap the user is performing.
 ///

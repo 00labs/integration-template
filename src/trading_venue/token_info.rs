@@ -9,10 +9,8 @@ use solana_account::Account;
 use solana_pubkey::Pubkey;
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 use spl_token::solana_program::clock::Epoch;
-use spl_token_2022::{
-    extension::{BaseStateWithExtensions, StateWithExtensions},
-    state::Mint,
-};
+use spl_token_2022::extension::{BaseStateWithExtensions, StateWithExtensions};
+use spl_token_2022::state::Mint;
 
 use crate::trading_venue::error::TradingVenueError;
 

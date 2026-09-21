@@ -7,7 +7,6 @@
 //! `5SmPcQByiS9QbGdamzdN4H2bTrLRMj5jAPKa1VZUnekvrqzucGZNteHogyvqh5hw8ZQd6T7tpwJQY1uA4h1DSzg8`
 
 use solana_pubkey::{Pubkey, pubkey};
-
 use titan_integration_template::huma::{HUMA_PERMISSIONLESS_PROGRAM_ID, parse_pool_creations};
 use titan_integration_template::trading_venue::protocol::PoolProtocol;
 use titan_integration_template::trading_venue::venue_creation::{ParsedInstruction, PoolCreation};
@@ -27,13 +26,13 @@ fn huma_pool_creation() -> ParsedInstruction {
         accounts: vec![
             pubkey!("Huma8ZB251nwuYxDME4EFir1z8wvYw97Yr3hg9g3qKQL"), // 0  pool_owner
             pubkey!("28hFhD21Nka3stL27a8zZ4nRLgaDVxRYwJgeEVgeakzS"), // 1  pool_config
-            pubkey!("iFgP2EbzHUZzMjqbjaagJQ8zmn6as3Hw95aVUKm67od"), // 2  pool_state
+            pubkey!("iFgP2EbzHUZzMjqbjaagJQ8zmn6as3Hw95aVUKm67od"),  // 2  pool_state
             pubkey!("9936VFvgRmW1STvdgeyPQaKHDx5DwBtbhZkT3HcdL3QK"), // 3  pool_authority
             UNDERLYING_MINT,                                         // 4  underlying_mint
             MODE_CONFIG,                                             // 5  mode_config (init)
             MODE_MINT,                                               // 6  mode_mint (init)
             pubkey!("BmcaTXkNC4ybJK3d22gKDPjGxd61rzYFiSrdNeamxjS1"), // 7  token_metadata
-            pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), // 8  token_program
+            pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),  // 8  token_program
             pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"), // 9  associated_token_program
             pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"), // 10 mpl_token_metadata_program
             pubkey!("11111111111111111111111111111111"),            // 11 system_program
@@ -43,13 +42,13 @@ fn huma_pool_creation() -> ParsedInstruction {
         // Real instruction data: add_mode discriminator (8) + mode_id (32) +
         // mode_name ("Classic") + target_apy_bps + token-metadata args.
         data: vec![
-            136, 187, 228, 193, 168, 107, 113, 144, 220, 146, 104, 91, 68, 157, 127, 175, 104,
-            165, 240, 151, 100, 44, 59, 253, 181, 196, 171, 178, 29, 17, 157, 247, 52, 101, 235,
-            67, 200, 60, 93, 183, 7, 0, 0, 0, 67, 108, 97, 115, 115, 105, 99, 26, 4, 27, 0, 0, 0,
-            80, 97, 121, 70, 105, 32, 83, 116, 114, 97, 116, 101, 103, 121, 32, 84, 111, 107, 101,
-            110, 32, 45, 32, 85, 83, 68, 67, 8, 0, 0, 0, 80, 83, 84, 45, 85, 83, 68, 67, 34, 0, 0,
-            0, 104, 116, 116, 112, 115, 58, 47, 47, 109, 101, 116, 97, 46, 104, 117, 109, 97, 46,
-            102, 105, 110, 97, 110, 99, 101, 47, 112, 115, 116, 46, 106, 115, 111, 110,
+            136, 187, 228, 193, 168, 107, 113, 144, 220, 146, 104, 91, 68, 157, 127, 175, 104, 165,
+            240, 151, 100, 44, 59, 253, 181, 196, 171, 178, 29, 17, 157, 247, 52, 101, 235, 67,
+            200, 60, 93, 183, 7, 0, 0, 0, 67, 108, 97, 115, 115, 105, 99, 26, 4, 27, 0, 0, 0, 80,
+            97, 121, 70, 105, 32, 83, 116, 114, 97, 116, 101, 103, 121, 32, 84, 111, 107, 101, 110,
+            32, 45, 32, 85, 83, 68, 67, 8, 0, 0, 0, 80, 83, 84, 45, 85, 83, 68, 67, 34, 0, 0, 0,
+            104, 116, 116, 112, 115, 58, 47, 47, 109, 101, 116, 97, 46, 104, 117, 109, 97, 46, 102,
+            105, 110, 97, 110, 99, 101, 47, 112, 115, 116, 46, 106, 115, 111, 110,
         ],
     }
 }

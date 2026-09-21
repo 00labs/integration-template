@@ -1,10 +1,9 @@
 pub mod rpc_cache;
 
-use solana_account::Account;
-use thiserror::Error;
-
 use async_trait::async_trait;
+use solana_account::Account;
 use solana_pubkey::Pubkey;
+use thiserror::Error;
 
 /// Trait that abstracts account retrieval for Titan.
 ///

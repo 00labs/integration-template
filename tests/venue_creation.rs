@@ -13,7 +13,6 @@
 //! access. Unlike the RPC-gated suites, it always runs.
 
 use solana_pubkey::{Pubkey, pubkey};
-
 use titan_integration_template::example::{RAYDIUM_AMM_PROGRAM_ID, parse_pool_creations};
 use titan_integration_template::trading_venue::protocol::PoolProtocol;
 use titan_integration_template::trading_venue::venue_creation::{ParsedInstruction, PoolCreation};
