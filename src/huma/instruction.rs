@@ -13,8 +13,13 @@ use crate::huma::state::anchor_instruction_discriminator;
 const NO_COMMITMENT: &str = "NO_COMMITMENT";
 
 pub enum HumaInstruction {
-    Deposit { assets: u64 },
-    InstantWithdraw { shares: u64, max_fee: u64 },
+    Deposit {
+        assets: u64,
+    },
+    InstantWithdraw {
+        shares: u64,
+        max_fee: u64,
+    },
     /// Provision a lender's accounts on a mode. Takes no args (data is just the
     /// discriminator); the lender is an account, not an argument.
     CreateLenderAccountsV2,
@@ -96,6 +101,9 @@ mod tests {
         let data = HumaInstruction::CreateLenderAccountsV2.pack();
         // discriminator only, no args
         assert_eq!(data.len(), 8);
-        assert_eq!(data, anchor_instruction_discriminator("create_lender_accounts_v2"));
+        assert_eq!(
+            data,
+            anchor_instruction_discriminator("create_lender_accounts_v2")
+        );
     }
 }

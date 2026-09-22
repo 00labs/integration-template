@@ -102,9 +102,10 @@ impl KaminoLendStrategy {
             .map_err(|_| TradingVenueError::FailedToFetchMultipleAccountData)?;
         let reserve_account =
             reserve_account.ok_or(TradingVenueError::NoAccountFound(self.reserve.into()))?;
-        let reserve: &Reserve = state::from_account_data(reserve_account.data()).map_err(|e| {
-            TradingVenueError::DeserializationFailed(format!("KLend reserve: {e}").into())
-        })?;
+        let reserve: &Reserve =
+            state::from_account_data(reserve_account.data()).map_err(|err| {
+                TradingVenueError::DeserializationFailed(format!("KLend reserve: {err}").into())
+            })?;
 
         self.lending_market = reserve.lending_market;
         self.reserve_collateral_mint = reserve.collateral.mint_pubkey;
@@ -140,16 +141,16 @@ impl KaminoLendStrategy {
         let deposited_collateral = match obligation_account {
             Some(account) => {
                 let obligation: &Obligation =
-                    state::from_account_data(account.data()).map_err(|e| {
+                    state::from_account_data(account.data()).map_err(|err| {
                         TradingVenueError::DeserializationFailed(
-                            format!("KLend obligation: {e}").into(),
+                            format!("KLend obligation: {err}").into(),
                         )
                     })?;
                 obligation
                     .deposits
                     .iter()
-                    .find(|d| d.deposit_reserve == self.reserve)
-                    .map(|d| d.deposited_amount)
+                    .find(|deposit| deposit.deposit_reserve == self.reserve)
+                    .map(|deposit| deposit.deposited_amount)
                     .unwrap_or(0)
             }
             None => 0,

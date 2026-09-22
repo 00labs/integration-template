@@ -16,7 +16,8 @@ use std::fmt::Display;
 use solana_pubkey::Pubkey;
 use thiserror::Error;
 
-use crate::{account_caching::AccountCacheError, trading_venue::protocol::PoolProtocol};
+use crate::account_caching::AccountCacheError;
+use crate::trading_venue::protocol::PoolProtocol;
 
 /// Wrapper type for attaching additional context to an error.
 ///

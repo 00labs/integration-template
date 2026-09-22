@@ -3,10 +3,11 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(deprecated)]
 
+use std::mem::size_of;
+
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use solana_sysvar::__private::ProgramError;
-use std::mem::size_of;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

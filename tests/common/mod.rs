@@ -17,6 +17,7 @@ use std::env;
 use std::path::Path;
 use std::time::Instant;
 
+use assert_no_alloc::assert_no_alloc;
 use litesvm::LiteSVM;
 use solana_account::{Account, ReadableAccount, WritableAccount};
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -31,9 +32,6 @@ use solana_sysvar::clock::{self, Clock};
 use solana_transaction::Transaction;
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 use spl_token::state::{Account as TokenAccount, AccountState};
-
-use assert_no_alloc::assert_no_alloc;
-
 use titan_integration_template::account_caching::AccountsCache;
 use titan_integration_template::account_caching::rpc_cache::RpcClientCache;
 use titan_integration_template::example::RaydiumAmmVenue;

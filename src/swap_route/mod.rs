@@ -30,9 +30,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-use crate::trading_venue::{
-    QuoteRequest, TradingVenue, error::TradingVenueError, protocol::PoolProtocol,
-};
+use crate::trading_venue::error::TradingVenueError;
+use crate::trading_venue::protocol::PoolProtocol;
+use crate::trading_venue::{QuoteRequest, TradingVenue};
 
 /// Single-byte instruction discriminator for `swap_route_v3`.
 pub const SWAP_ROUTE_V3_DISCRIMINATOR: u8 = 42;
@@ -52,7 +52,9 @@ pub enum Venue {
     /// Huma deposit / instant-withdraw leg. `is_deposit` selects the direction
     /// the program adapter builds: `true` = deposit (underlying → mode shares),
     /// `false` = instant withdrawal (mode shares → underlying).
-    Huma { is_deposit: bool },
+    Huma {
+        is_deposit: bool,
+    },
 }
 
 impl Venue {
@@ -186,10 +188,12 @@ pub fn encode_swap_route_v3_data(amount: u64, mints: u8, swaps: &[SwapSpecInputV
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+
     use super::*;
     use crate::account_caching::AccountsCache;
-    use crate::trading_venue::{QuoteResult, SwapType, token_info::TokenInfo};
-    use async_trait::async_trait;
+    use crate::trading_venue::token_info::TokenInfo;
+    use crate::trading_venue::{QuoteResult, SwapType};
 
     const VENUE_PID: Pubkey = Pubkey::new_from_array([7u8; 32]);
 
@@ -344,6 +348,9 @@ mod tests {
             Venue::Huma { is_deposit: false }.to_borsh_bytes(),
             vec![1, 0]
         );
-        assert_eq!(Venue::Huma { is_deposit: true }.to_borsh_bytes(), vec![1, 1]);
+        assert_eq!(
+            Venue::Huma { is_deposit: true }.to_borsh_bytes(),
+            vec![1, 1]
+        );
     }
 }
